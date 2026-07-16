@@ -1,0 +1,524 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FormSnap - 截图即填，一键搞定重复表单</title>
+<meta name="description" content="AI 驱动的智能表单填写助手，支持截图/文本/文档识别，一键填写任意网页表单和在线表格。">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        paper: '#FAF8F0',
+        ink: {
+          50: '#F5F3EC',
+          100: '#E8E4DA',
+          200: '#D1CCC0',
+          300: '#B5AE9E',
+          400: '#9A9280',
+          500: '#7A7365',
+          600: '#5C564B',
+          700: '#3E3A33',
+          800: '#2A2722',
+          900: '#1A1814',
+        },
+        cinnabar: {
+          DEFAULT: '#B91C1C',
+          light: '#DC2626',
+          dark: '#991B1B',
+        },
+      },
+      fontFamily: {
+        sans: ['"Noto Sans SC"', 'system-ui', '-apple-system', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
+      },
+    }
+  }
+}
+</script>
+<style>
+  :root {
+    --bg-paper: #FAF8F0;
+    --bg-wash: rgba(250,248,240,0.92);
+    --ink-900: #1A1814;
+    --ink-700: #3E3A33;
+    --ink-500: #7A7365;
+    --ink-300: #B5AE9E;
+    --ink-200: #D1CCC0;
+    --accent: #B91C1C;
+    --accent-light: #DC2626;
+  }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Noto Sans SC', system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;
+    background: var(--bg-paper);
+    color: var(--ink-900);
+    overflow-x: hidden;
+  }
+
+  /* Scroll reveal */
+  .reveal {
+    opacity: 0;
+    transform: translateY(32px);
+    transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .reveal-delay-1 { transition-delay: 0.1s; }
+  .reveal-delay-2 { transition-delay: 0.2s; }
+  .reveal-delay-3 { transition-delay: 0.3s; }
+
+  /* Ink wash background decoration */
+  .ink-wash-bg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.06;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='400' viewBox='0 0 800 400'%3E%3Cpath d='M0,200 Q200,100 400,200 T800,200' fill='none' stroke='%233E3A33' stroke-width='80' opacity='0.3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center top;
+    background-size: 100% auto;
+  }
+
+  /* Hero entrance animation */
+  @keyframes heroIn {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .hero-animate {
+    animation: heroIn 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    opacity: 0;
+  }
+  .hero-animate-1 { animation-delay: 0.1s; }
+  .hero-animate-2 { animation-delay: 0.25s; }
+  .hero-animate-3 { animation-delay: 0.4s; }
+  .hero-animate-4 { animation-delay: 0.55s; }
+
+  /* Floating ink particles */
+  @keyframes float {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-12px) rotate(2deg); }
+  }
+  .float-slow {
+    animation: float 6s ease-in-out infinite;
+  }
+  .float-slower {
+    animation: float 8s ease-in-out infinite;
+    animation-delay: -2s;
+  }
+
+  /* CTA button ink stroke effect */
+  .btn-ink {
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .btn-ink::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    background: rgba(185, 28, 28, 0.08);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.5s ease, height 0.5s ease;
+  }
+  .btn-ink:hover::before {
+    width: 300%;
+    height: 300%;
+  }
+  .btn-ink:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(185, 28, 28, 0.2);
+  }
+  .btn-ink:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  /* Glass card */
+  .glass-card {
+    background: rgba(250, 248, 240, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(209, 204, 192, 0.4);
+  }
+
+  /* Step number styling */
+  .step-number {
+    font-family: 'Noto Sans SC', sans-serif;
+    font-weight: 300;
+    color: var(--ink-200);
+    font-size: 3.5rem;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  /* Link underline effect */
+  .link-underline {
+    position: relative;
+    text-decoration: none;
+  }
+  .link-underline::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 0;
+    height: 1.5px;
+    background: var(--accent);
+    transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .link-underline:hover::after {
+    width: 100%;
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .reveal, .hero-animate { opacity: 1; transform: none; animation: none; }
+    .float-slow, .float-slower { animation: none; }
+  }
+</style>
+</head>
+<body class="antialiased">
+
+<!-- Navigation -->
+<nav class="fixed top-0 left-0 right-0 z-50 transition-all duration-500" id="navbar">
+  <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="#" class="flex items-center gap-2.5 text-lg font-semibold text-ink-900 tracking-tight">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" class="text-cinnabar">
+        <rect x="2" y="6" width="24" height="16" rx="3" stroke="currentColor" stroke-width="2"/>
+        <path d="M8 12h4M8 16h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="20" cy="12" r="1.5" fill="currentColor"/>
+      </svg>
+      FormSnap
+    </a>
+    <div class="hidden md:flex items-center gap-8 text-sm font-medium text-ink-500">
+      <a href="#features" class="link-underline hover:text-ink-700 transition-colors">功能</a>
+      <a href="#how" class="link-underline hover:text-ink-700 transition-colors">使用</a>
+      <a href="#install" class="link-underline hover:text-ink-700 transition-colors">安装</a>
+      <a href="https://github.com/BUPTtt2/formsnap-extension" target="_blank" class="link-underline hover:text-ink-700 transition-colors">GitHub</a>
+    </div>
+    <a href="#install" class="btn-ink hidden sm:inline-flex items-center gap-1.5 px-5 py-2 bg-cinnabar text-white text-sm font-medium rounded-full">
+      免费安装
+    </a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="relative min-h-[100dvh] flex items-center overflow-hidden pt-16">
+  <div class="ink-wash-bg"></div>
+  <div class="max-w-6xl mx-auto px-6 w-full relative z-10">
+    <div class="grid lg:grid-cols-2 gap-12 lg:gap-8 items-center">
+      <!-- Left: Text -->
+      <div class="order-2 lg:order-1">
+        <p class="hero-animate hero-animate-1 text-xs font-medium tracking-[0.15em] uppercase text-ink-400 mb-4">AI 智能表单填写助手</p>
+        <h1 class="hero-animate hero-animate-2 text-4xl md:text-5xl lg:text-[3.25rem] font-bold text-ink-900 leading-[1.15] tracking-tight mb-5">
+          截图即填<br>
+          <span class="text-cinnabar">一键搞定</span>重复表单
+        </h1>
+        <p class="hero-animate hero-animate-3 text-base md:text-lg text-ink-500 leading-relaxed max-w-md mb-8">
+          告别手动复制粘贴。截图、文本或文件，AI 自动识别并填写到任意网页表单。坚果云、问卷星、报销系统...全部支持。
+        </p>
+        <div class="hero-animate hero-animate-4 flex flex-wrap gap-3">
+          <a href="#install" class="btn-ink inline-flex items-center gap-2 px-7 py-3 bg-cinnabar text-white font-medium rounded-full text-sm">
+            免费安装扩展
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a href="#how" class="inline-flex items-center gap-2 px-7 py-3 border border-ink-200 text-ink-700 font-medium rounded-full text-sm hover:border-ink-400 hover:bg-ink-50 transition-all duration-300">
+            了解怎么用
+          </a>
+        </div>
+      </div>
+      <!-- Right: Image -->
+      <div class="order-1 lg:order-2 relative">
+        <div class="relative float-slow">
+          <img src="./assets/hero.jpg" alt="FormSnap 智能表单填写" class="w-full rounded-2xl shadow-2xl shadow-ink-200/50" style="aspect-ratio: 16/9; object-fit: cover;">
+          <!-- Decorative ink dot -->
+          <div class="absolute -bottom-4 -left-4 w-20 h-20 rounded-full bg-cinnabar/10 blur-2xl"></div>
+          <div class="absolute -top-4 -right-4 w-16 h-16 rounded-full bg-ink-300/20 blur-xl float-slower"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- Scroll indicator (subtle) -->
+  <div class="absolute bottom-8 left-1/2 -translate-x-1/2 opacity-40">
+    <div class="w-5 h-8 border-2 border-ink-300 rounded-full flex justify-center pt-1.5">
+      <div class="w-1 h-2 bg-ink-400 rounded-full animate-bounce"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Pain Points -->
+<section class="py-24 md:py-32 relative">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="grid lg:grid-cols-5 gap-12 items-start">
+      <div class="lg:col-span-2 reveal">
+        <p class="text-xs font-medium tracking-[0.15em] uppercase text-ink-400 mb-3">为什么需要 FormSnap</p>
+        <h2 class="text-3xl md:text-4xl font-bold text-ink-900 leading-tight tracking-tight">
+          重复填表<br>浪费时间
+        </h2>
+      </div>
+      <div class="lg:col-span-3 grid sm:grid-cols-2 gap-6">
+        <div class="reveal reveal-delay-1 p-6 rounded-2xl bg-ink-50/50 border border-ink-100">
+          <div class="w-10 h-10 rounded-xl bg-cinnabar/10 flex items-center justify-center mb-4">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><rect x="3" y="5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 8h6M7 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <h3 class="font-semibold text-ink-800 mb-1.5">信息反复录入</h3>
+          <p class="text-sm text-ink-500 leading-relaxed">同样的姓名、身份证号、银行卡号，在不同系统里填了一遍又一遍。</p>
+        </div>
+        <div class="reveal reveal-delay-2 p-6 rounded-2xl bg-ink-50/50 border border-ink-100">
+          <div class="w-10 h-10 rounded-xl bg-cinnabar/10 flex items-center justify-center mb-4">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <h3 class="font-semibold text-ink-800 mb-1.5">在线表格填不了</h3>
+          <p class="text-sm text-ink-500 leading-relaxed">坚果云、SpreadJS 等 Canvas 表格传统工具无法识别，只能手动输入。</p>
+        </div>
+        <div class="reveal reveal-delay-1 p-6 rounded-2xl bg-ink-50/50 border border-ink-100">
+          <div class="w-10 h-10 rounded-xl bg-cinnabar/10 flex items-center justify-center mb-4">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><path d="M4 7l6 6 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h3 class="font-semibold text-ink-800 mb-1.5">字段名对不上</h3>
+          <p class="text-sm text-ink-500 leading-relaxed">数据源叫"成绩"，表单叫"最佳成绩"，手动找对应费时又容易错。</p>
+        </div>
+        <div class="reveal reveal-delay-2 p-6 rounded-2xl bg-ink-50/50 border border-ink-100">
+          <div class="w-10 h-10 rounded-xl bg-cinnabar/10 flex items-center justify-center mb-4">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><path d="M10 4v8m0 0l-3-3m3 3l3-3M5 16h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h3 class="font-semibold text-ink-800 mb-1.5">没有历史记录</h3>
+          <p class="text-sm text-ink-500 leading-relaxed">填了一半页面刷新，所有内容丢失，从头再来。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Features (Bento-style) -->
+<section id="features" class="py-24 md:py-32 bg-ink-50/30">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center max-w-2xl mx-auto mb-16 reveal">
+      <p class="text-xs font-medium tracking-[0.15em] uppercase text-ink-400 mb-3">核心功能</p>
+      <h2 class="text-3xl md:text-4xl font-bold text-ink-900 tracking-tight mb-4">三种输入，一键填写</h2>
+      <p class="text-ink-500 leading-relaxed">无论你的数据在截图里、文本里还是 Excel 文件里，FormSnap 都能识别并自动匹配。</p>
+    </div>
+
+    <div class="grid md:grid-cols-12 gap-5">
+      <!-- Feature 1: Screenshot (large) -->
+      <div class="md:col-span-7 reveal">
+        <div class="group relative h-full rounded-2xl overflow-hidden bg-paper border border-ink-100 hover:shadow-xl hover:shadow-ink-200/30 transition-all duration-500">
+          <div class="p-8 pb-0">
+            <div class="w-10 h-10 rounded-xl bg-cinnabar/10 flex items-center justify-center mb-4">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><rect x="3" y="4" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+            </div>
+            <h3 class="text-xl font-bold text-ink-900 mb-2">截图智能识别</h3>
+            <p class="text-sm text-ink-500 leading-relaxed max-w-sm">上传任意截图，多模态 AI 自动提取字段名和值。支持多张截图同时解析，生成多行数据。</p>
+          </div>
+          <div class="mt-6 px-8 pb-8">
+            <img src="./assets/feature-screenshot.jpg" alt="截图识别" class="w-full rounded-xl shadow-lg" style="aspect-ratio: 4/3; object-fit: cover;">
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature 2 & 3 stacked -->
+      <div class="md:col-span-5 flex flex-col gap-5">
+        <div class="reveal reveal-delay-1 flex-1 rounded-2xl overflow-hidden bg-paper border border-ink-100 hover:shadow-xl hover:shadow-ink-200/30 transition-all duration-500">
+          <div class="p-8">
+            <div class="w-10 h-10 rounded-xl bg-cinnabar/10 flex items-center justify-center mb-4">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><path d="M4 7h12M4 10h8M4 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <h3 class="text-lg font-bold text-ink-900 mb-2">文本 & 文件导入</h3>
+            <p class="text-sm text-ink-500 leading-relaxed">直接粘贴任意格式文本，或上传 Excel/CSV 文件。自动解析为结构化数据，无需手动整理。</p>
+          </div>
+          <div class="px-8 pb-8">
+            <img src="./assets/feature-match.jpg" alt="AI 语义匹配" class="w-full rounded-xl shadow-md" style="aspect-ratio: 4/3; object-fit: cover;">
+          </div>
+        </div>
+        <div class="reveal reveal-delay-2 flex-1 rounded-2xl p-8 bg-ink-900 text-paper border border-ink-800">
+          <div class="w-10 h-10 rounded-xl bg-cinnabar/20 flex items-center justify-center mb-4">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="text-cinnabar"><path d="M10 2v16M2 10h16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Canvas 表格突破</h3>
+          <p class="text-sm text-ink-300 leading-relaxed">自动检测 SpreadJS Canvas 表格，通过 AI 视觉识别列名，生成 TSV 数据一键粘贴到坚果云等在线表格。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Secondary features row -->
+    <div class="grid sm:grid-cols-3 gap-5 mt-5">
+      <div class="reveal p-6 rounded-2xl bg-paper border border-ink-100">
+        <h4 class="font-semibold text-ink-800 mb-2">三级智能匹配</h4>
+        <p class="text-sm text-ink-500 leading-relaxed">精确匹配 + 模糊匹配 + AI 语义匹配。"成绩"自动对应"最佳成绩"，无需手动调整。</p>
+      </div>
+      <div class="reveal reveal-delay-1 p-6 rounded-2xl bg-paper border border-ink-100">
+        <h4 class="font-semibold text-ink-800 mb-2">填写历史记录</h4>
+        <p class="text-sm text-ink-500 leading-relaxed">每次填写自动保存，支持编辑、删除、复用。TSV/JSON/文本三种格式一键复制。</p>
+      </div>
+      <div class="reveal reveal-delay-2 p-6 rounded-2xl bg-paper border border-ink-100">
+        <h4 class="font-semibold text-ink-800 mb-2">一键撤销</h4>
+        <p class="text-sm text-ink-500 leading-relaxed">填错了？点击撤销，瞬间恢复表单原始数据，零风险尝试。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- How it Works -->
+<section id="how" class="py-24 md:py-32 relative">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center max-w-2xl mx-auto mb-16 reveal">
+      <p class="text-xs font-medium tracking-[0.15em] uppercase text-ink-400 mb-3">使用流程</p>
+      <h2 class="text-3xl md:text-4xl font-bold text-ink-900 tracking-tight">三步搞定</h2>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-8 md:gap-6">
+      <div class="reveal text-center md:text-left">
+        <span class="step-number">01</span>
+        <h3 class="text-lg font-bold text-ink-900 mt-3 mb-2">输入数据</h3>
+        <p class="text-sm text-ink-500 leading-relaxed">截图、粘贴文本或上传 Excel/CSV 文件。AI 自动识别所有字段和值。</p>
+      </div>
+      <div class="reveal reveal-delay-1 text-center md:text-left">
+        <span class="step-number">02</span>
+        <h3 class="text-lg font-bold text-ink-900 mt-3 mb-2">确认匹配</h3>
+        <p class="text-sm text-ink-500 leading-relaxed">AI 自动将数据源字段与表单字段匹配。拖拽调整，所见即所得。</p>
+      </div>
+      <div class="reveal reveal-delay-2 text-center md:text-left">
+        <span class="step-number">03</span>
+        <h3 class="text-lg font-bold text-ink-900 mt-3 mb-2">一键填写</h3>
+        <p class="text-sm text-ink-500 leading-relaxed">点击填充按钮，所有字段瞬间填写完成。Canvas 表格则复制 TSV 粘贴即可。</p>
+      </div>
+    </div>
+
+    <!-- Visual step illustration -->
+    <div class="mt-16 reveal">
+      <img src="./assets/feature-fill.jpg" alt="一键填写演示" class="w-full rounded-2xl shadow-xl shadow-ink-200/40" style="aspect-ratio: 16/9; object-fit: cover; max-height: 480px;">
+    </div>
+  </div>
+</section>
+
+<!-- Supported APIs -->
+<section class="py-24 md:py-32 bg-ink-50/30">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center max-w-2xl mx-auto mb-12 reveal">
+      <p class="text-xs font-medium tracking-[0.15em] uppercase text-ink-400 mb-3">模型支持</p>
+      <h2 class="text-3xl md:text-4xl font-bold text-ink-900 tracking-tight mb-4">自由选择 AI 模型</h2>
+      <p class="text-ink-500 leading-relaxed">支持任何 OpenAI 兼容 API。内置多个免费模型预设，开箱即用。</p>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 reveal">
+      <div class="flex flex-col items-center gap-3 p-5 rounded-xl bg-paper border border-ink-100 hover:border-ink-300 transition-colors">
+        <span class="text-sm font-semibold text-ink-800">OpenAI</span>
+        <span class="text-xs text-ink-400">GPT-4o</span>
+      </div>
+      <div class="flex flex-col items-center gap-3 p-5 rounded-xl bg-paper border border-ink-100 hover:border-ink-300 transition-colors">
+        <span class="text-sm font-semibold text-ink-800">智谱 AI</span>
+        <span class="text-xs text-ink-400">GLM-4-Flash 免费</span>
+      </div>
+      <div class="flex flex-col items-center gap-3 p-5 rounded-xl bg-paper border border-ink-100 hover:border-ink-300 transition-colors">
+        <span class="text-sm font-semibold text-ink-800">硅基流动</span>
+        <span class="text-xs text-ink-400">DeepSeek-V3</span>
+      </div>
+      <div class="flex flex-col items-center gap-3 p-5 rounded-xl bg-paper border border-ink-100 hover:border-ink-300 transition-colors">
+        <span class="text-sm font-semibold text-ink-800">DeepSeek</span>
+        <span class="text-xs text-ink-400">deepseek-chat</span>
+      </div>
+      <div class="flex flex-col items-center gap-3 p-5 rounded-xl bg-paper border border-ink-100 hover:border-ink-300 transition-colors">
+        <span class="text-sm font-semibold text-ink-800">阿里云</span>
+        <span class="text-xs text-ink-400">通义千问</span>
+      </div>
+      <div class="flex flex-col items-center gap-3 p-5 rounded-xl bg-paper border border-ink-100 hover:border-ink-300 transition-colors">
+        <span class="text-sm font-semibold text-ink-800">自定义</span>
+        <span class="text-xs text-ink-400">OpenAI 兼容</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Install CTA -->
+<section id="install" class="py-24 md:py-32">
+  <div class="max-w-3xl mx-auto px-6 text-center reveal">
+    <h2 class="text-3xl md:text-4xl font-bold text-ink-900 tracking-tight mb-4">开始节省你的时间</h2>
+    <p class="text-ink-500 leading-relaxed mb-8 max-w-lg mx-auto">FormSnap 完全免费，支持 Chrome 和 Edge 浏览器。安装后配置 API Key 即可使用。</p>
+
+    <div class="flex flex-col sm:flex-row gap-3 justify-center mb-10">
+      <a href="https://github.com/BUPTtt2/formsnap-extension" target="_blank" class="btn-ink inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-cinnabar text-white font-medium rounded-full text-sm">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        从 GitHub 安装
+      </a>
+      <span class="inline-flex items-center justify-center gap-2 px-8 py-3.5 border border-ink-200 text-ink-500 font-medium rounded-full text-sm cursor-not-allowed opacity-60">
+        Edge 商店审核中
+      </span>
+    </div>
+
+    <!-- Install steps -->
+    <div class="text-left max-w-xl mx-auto bg-paper rounded-2xl border border-ink-100 p-6 md:p-8">
+      <h3 class="font-semibold text-ink-800 mb-4">安装步骤</h3>
+      <ol class="space-y-3 text-sm text-ink-600">
+        <li class="flex gap-3">
+          <span class="flex-shrink-0 w-6 h-6 rounded-full bg-cinnabar/10 text-cinnabar text-xs font-semibold flex items-center justify-center">1</span>
+          <span>下载源码并运行 <code class="bg-ink-100 px-1.5 py-0.5 rounded text-xs font-mono">npm run build</code></span>
+        </li>
+        <li class="flex gap-3">
+          <span class="flex-shrink-0 w-6 h-6 rounded-full bg-cinnabar/10 text-cinnabar text-xs font-semibold flex items-center justify-center">2</span>
+          <span>打开 Chrome，访问 <code class="bg-ink-100 px-1.5 py-0.5 rounded text-xs font-mono">chrome://extensions/</code></span>
+        </li>
+        <li class="flex gap-3">
+          <span class="flex-shrink-0 w-6 h-6 rounded-full bg-cinnabar/10 text-cinnabar text-xs font-semibold flex items-center justify-center">3</span>
+          <span>开启「开发者模式」，加载 <code class="bg-ink-100 px-1.5 py-0.5 rounded text-xs font-mono">dist/</code> 目录</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="flex-shrink-0 w-6 h-6 rounded-full bg-cinnabar/10 text-cinnabar text-xs font-semibold flex items-center justify-center">4</span>
+          <span>点击扩展图标，配置你的 API Key</span>
+        </li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="py-12 border-t border-ink-100">
+  <div class="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4">
+    <div class="flex items-center gap-2 text-sm text-ink-400">
+      <svg width="20" height="20" viewBox="0 0 28 28" fill="none" class="text-ink-300">
+        <rect x="2" y="6" width="24" height="16" rx="3" stroke="currentColor" stroke-width="2"/>
+        <path d="M8 12h4M8 16h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="20" cy="12" r="1.5" fill="currentColor"/>
+      </svg>
+      <span>FormSnap - AI 智能表单填写助手</span>
+    </div>
+    <div class="flex items-center gap-6 text-sm text-ink-400">
+      <a href="https://github.com/BUPTtt2/formsnap-extension" target="_blank" class="hover:text-ink-600 transition-colors">GitHub</a>
+      <span>MIT License</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Navbar scroll effect
+  const navbar = document.getElementById('navbar');
+  window.addEventListener('scroll', () => {
+    if (window.scrollY > 20) {
+      navbar.classList.add('bg-paper/80', 'backdrop-blur-md', 'border-b', 'border-ink-100');
+    } else {
+      navbar.classList.remove('bg-paper/80', 'backdrop-blur-md', 'border-b', 'border-ink-100');
+    }
+  });
+
+  // Scroll reveal with IntersectionObserver
+  const revealEls = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+  revealEls.forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

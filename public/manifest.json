@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "FormSnap - 智能表单填写助手",
+  "version": "1.0.0",
+  "description": "AI驱动的表单自动填写工具，支持截图/文本/文档识别，一键填写任意网页表单",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
