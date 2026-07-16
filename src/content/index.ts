@@ -1,6 +1,8 @@
 import { FormSnapMessage } from './contentTypes';
 import { scanPageForms, detectNewButtons, clickNewButton, waitForFormFields, detectCanvasSpreadsheet } from './formScanner';
 import { executeFillMappingsWithUndo, undoFill, fillCanvasSpreadsheet } from './formFiller';
+// Import agent scanner to register its message listeners in the content script bundle
+import './agentScanner';
 
 chrome.runtime.onMessage.addListener(
   (message: FormSnapMessage, sender, sendResponse) => {
