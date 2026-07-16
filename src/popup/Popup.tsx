@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { ParsedField, FormField, MappingResult, ExtensionSettings, NewButtonInfo, CanvasSpreadsheetInfo, CanvasColumn } from '../core/types';
+import { ParsedField, FormField, MappingResult, ExtensionSettings, NewButtonInfo, CanvasSpreadsheetInfo, CanvasColumn, ModalInfo } from '../core/types';
 import { sendMessage, sendMessageToTab, getCurrentTab } from '../utils/message';
 import { prepareImageForAI, clipboardToBlob } from '../utils/imageUtils';
 import { parseFile } from '../utils/fileParser';
@@ -40,6 +40,8 @@ export default function Popup() {
   const [manualField, setManualField] = useState('');
   const [manualValue, setManualValue] = useState('');
   const [manualTargetIdx, setManualTargetIdx] = useState(-1);
+  const [modalButtons, setModalButtons] = useState<ModalInfo[] | null>(null);
+  const [scanDepth, setScanDepth] = useState<'standard' | 'deep'>('standard');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const excelFileRef = useRef<HTMLInputElement>(null);
@@ -239,9 +241,11 @@ export default function Popup() {
       }
 
       setParsedFields(fields);
+      setModalButtons(null);
+      setScanDepth('standard');
       setStatus({ type: 'loading', text: `已识别 ${fields.length} 个字段，正在扫描页面表单...` });
 
-      // Scan current page
+      // Scan current page (standard scan first)
       const tab = await getCurrentTab();
       let scanResult: { fields: FormField[]; newButtons?: NewButtonInfo[]; canvasInfo?: CanvasSpreadsheetInfo; url: string; title: string };
       try {
@@ -281,14 +285,34 @@ export default function Popup() {
           setLoading(false);
           return;
         }
-        if (scanResult.newButtons && scanResult.newButtons.length > 0) {
-          setNewButtons(scanResult.newButtons);
-          setStatus({ type: 'info', text: `当前页面没有可填写的表单，检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
-        } else {
-          setStatus({ type: 'error', text: '当前页面未检测到表单字段' });
+        // No fields found - try deep scan with Shadow DOM support
+        setStatus({ type: 'loading', text: '标准扫描未找到表单，尝试深度扫描（含 Shadow DOM）...' });
+        setScanDepth('deep');
+        try {
+          const deepResult = await sendMessage<{ fields?: FormField[]; modals?: ModalInfo[]; error?: string }>('SCAN_FORM_DEEP');
+          if (deepResult.fields?.length) {
+            scanResult = { ...scanResult, fields: deepResult.fields };
+          }
+          if (deepResult.modals?.length) {
+            setModalButtons(deepResult.modals);
+          }
+        } catch (deepErr) {
+          // Deep scan failed, continue with standard result
         }
-        setLoading(false);
-        return;
+
+        // Still no fields?
+        if (!scanResult.fields?.length) {
+          if (scanResult.newButtons && scanResult.newButtons.length > 0) {
+            setNewButtons(scanResult.newButtons);
+            setStatus({ type: 'info', text: `当前页面没有可填写的表单，检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
+          } else if (modalButtons && modalButtons.length > 0) {
+            setStatus({ type: 'info', text: `未找到表单，但检测到 ${modalButtons.length} 个弹窗/设置按钮，请先点击打开` });
+          } else {
+            setStatus({ type: 'error', text: '当前页面未检测到表单字段。可能需要先点击弹窗或展开编辑区域' });
+          }
+          setLoading(false);
+          return;
+        }
       }
 
       await proceedWithScanResult(fields, scanResult);
@@ -369,6 +393,34 @@ export default function Popup() {
         url: result.url,
         title: result.title,
       });
+    } catch (err: any) {
+      setStatus({ type: 'error', text: err.message || '操作失败' });
+      setLoading(false);
+    }
+  }, [parsedFields]);
+
+  // 点击弹窗/设置按钮，然后重新扫描
+  const handleClickModalButton = useCallback(async (selector: string) => {
+    setLoading(true);
+    setStatus({ type: 'loading', text: '正在打开弹窗并重新扫描...' });
+    try {
+      const tab = await getCurrentTab();
+      // 点击弹窗按钮
+      await sendMessageToTab(tab.id!, 'CLICK_NEW_BUTTON', { selector });
+      // 等待弹窗动画完成
+      await new Promise((r) => setTimeout(r, 800));
+      // 深度扫描
+      const deepResult = await sendMessage<{ fields?: FormField[]; modals?: ModalInfo[]; error?: string }>('SCAN_FORM_DEEP');
+      if (deepResult.fields?.length) {
+        await proceedWithScanResult(parsedFields, {
+          fields: deepResult.fields,
+          url: (await getCurrentTab()).url || '',
+          title: '',
+        });
+      } else {
+        setStatus({ type: 'info', text: '弹窗打开后仍未检测到表单，请手动展开编辑区域后重试' });
+        setLoading(false);
+      }
     } catch (err: any) {
       setStatus({ type: 'error', text: err.message || '操作失败' });
       setLoading(false);
@@ -706,12 +758,27 @@ export default function Popup() {
       {/* New buttons suggestion */}
       {newButtons && newButtons.length > 0 && step === 'input' && !loading && (
         <div style={{ padding: '8px 12px', background: '#fff8e6', border: '1px solid #ffd666', borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
-          <div style={{ marginBottom: 6, fontWeight: 500 }}>⚡ 当前页面需要先创建输入行才能填写</div>
+          <div style={{ marginBottom: 6, fontWeight: 500 }}>当前页面需要先创建输入行才能填写</div>
           <div style={{ color: 'var(--muted)', marginBottom: 8 }}>检测到以下按钮，点击可自动创建表单：</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {newButtons.map((btn, i) => (
               <button key={i} className="btn btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => handleClickNewButton(btn.selector)}>
                 {btn.text || '新建'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Modal/drawer buttons suggestion */}
+      {modalButtons && modalButtons.length > 0 && step === 'input' && !loading && (
+        <div style={{ padding: '8px 12px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+          <div style={{ marginBottom: 6, fontWeight: 500 }}>未找到表单，可能需要先打开弹窗</div>
+          <div style={{ color: 'var(--muted)', marginBottom: 8 }}>检测到以下按钮，点击可自动打开并重新扫描：</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {modalButtons.map((btn, i) => (
+              <button key={i} className="btn btn-outline" style={{ fontSize: 11, padding: '4px 10px', borderColor: '#3B82F6', color: '#3B82F6' }} onClick={() => handleClickModalButton(btn.selector)}>
+                {btn.text}
               </button>
             ))}
           </div>

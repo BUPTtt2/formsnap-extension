@@ -77,7 +77,15 @@ export type MessageType =
   | 'UNDO_FILL'
   | 'SAVE_MAPPING_HISTORY'
   | 'GET_MAPPING_HISTORY'
-  | 'CLICK_NEW_BUTTON';
+  | 'CLICK_NEW_BUTTON'
+  | 'SCAN_FORM_DEEP'
+  | 'DETECT_MODALS';
+
+export interface ModalInfo {
+  text: string;
+  selector: string;
+  tagName: string;
+}
 
 export interface FormSnapMessage {
   type: MessageType;

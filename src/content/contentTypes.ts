@@ -42,6 +42,12 @@ export interface NewButtonInfo {
   tagName: string;
 }
 
+export interface ModalInfo {
+  text: string;
+  selector: string;
+  tagName: string;
+}
+
 export interface FillFormResultItem {
   selector: string;
   success: boolean;

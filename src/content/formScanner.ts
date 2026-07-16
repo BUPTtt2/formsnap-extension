@@ -1,4 +1,4 @@
-import { FormField, NewButtonInfo } from './contentTypes';
+import { FormField, NewButtonInfo, ModalInfo } from './contentTypes';
 
 type FieldType = 'text' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'date' | 'number';
 
@@ -297,16 +297,114 @@ function getRadioGroupOptions(name: string): string[] {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Shadow DOM 递归遍历辅助函数
+// ---------------------------------------------------------------------------
+
+/**
+ * 递归遍历 Shadow DOM，收集所有匹配选择器的输入元素。
+ * 穿透 open mode 的 shadowRoot，在内部继续查找 input/textarea/select/contenteditable 元素。
+ */
+function walkShadowDOM(root: Element, results: HTMLElement[]): void {
+  const selector = 'input, textarea, select, [contenteditable="true"], [contenteditable=""]';
+  const found = root.querySelectorAll(selector);
+  found.forEach((el) => {
+    if (!results.includes(el as HTMLElement)) {
+      results.push(el as HTMLElement);
+    }
+  });
+  // 递归进入子元素的 shadowRoot
+  const children = root.querySelectorAll('*');
+  children.forEach((child) => {
+    const shadowRoot = (child as HTMLElement).shadowRoot;
+    if (shadowRoot) {
+      walkShadowDOM(shadowRoot as any, results);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Shadow DOM 辅助：在 shadowRoot 中查找表单元素
+// ---------------------------------------------------------------------------
+
+/**
+ * 从所有 shadowRoot 中收集表单输入元素（input/textarea/select）。
+ */
+function collectShadowFormElements(): HTMLElement[] {
+  const results: HTMLElement[] = [];
+  // 收集页面中所有 open shadow root
+  const allElements = document.querySelectorAll('*');
+  allElements.forEach((el) => {
+    const shadowRoot = (el as HTMLElement).shadowRoot;
+    if (shadowRoot) {
+      walkShadowDOM(shadowRoot as any, results);
+    }
+  });
+  return results;
+}
+
+/**
+ * 从所有 shadowRoot 中收集 contenteditable 元素。
+ */
+function collectShadowEditableElements(): HTMLElement[] {
+  const results: HTMLElement[] = [];
+  const allElements = document.querySelectorAll('*');
+  allElements.forEach((el) => {
+    const shadowRoot = (el as HTMLElement).shadowRoot;
+    if (shadowRoot) {
+      // 在 shadowRoot 内查找 contenteditable
+      const editables = shadowRoot.querySelectorAll('[contenteditable="true"], [contenteditable=""]');
+      editables.forEach((e) => {
+        if (!results.includes(e as HTMLElement)) {
+          results.push(e as HTMLElement);
+        }
+      });
+      // 递归检查 shadowRoot 内的子元素是否也有 shadowRoot
+      walkShadowDOMForEditables(shadowRoot as any, results);
+    }
+  });
+  return results;
+}
+
+/**
+ * 递归遍历 shadowRoot 内部，收集 contenteditable 元素。
+ */
+function walkShadowDOMForEditables(root: Element, results: HTMLElement[]): void {
+  const children = root.querySelectorAll('*');
+  children.forEach((child) => {
+    const htmlChild = child as HTMLElement;
+    if (htmlChild.isContentEditable && !results.includes(htmlChild)) {
+      const rect = htmlChild.getBoundingClientRect();
+      if (rect.width >= 20 && rect.height >= 12) {
+        if (!(rect.height > 200 && rect.width > 500 && htmlChild.children.length > 20)) {
+          results.push(htmlChild);
+        }
+      }
+    }
+    const shadowRoot = htmlChild.shadowRoot;
+    if (shadowRoot) {
+      walkShadowDOMForEditables(shadowRoot as any, results);
+    }
+  });
+}
+
 /**
  * Find all contenteditable elements on the page, including those with inherited contenteditable.
  * This catches cases where contenteditable is set on a parent container and children inherit it.
+ * 现在支持穿透 Shadow DOM 查找。
  */
 function findAllEditableElements(): HTMLElement[] {
   const results: HTMLElement[] = [];
 
-  // Method 1: Explicit contenteditable attributes
+  // Method 1: Explicit contenteditable attributes（主文档）
   const explicit = document.querySelectorAll('[contenteditable="true"], [contenteditable=""]');
   explicit.forEach((el) => results.push(el as HTMLElement));
+
+  // Method 1.5: 从 Shadow DOM 中收集 contenteditable 元素
+  const shadowEditables = collectShadowEditableElements();
+  shadowEditables.forEach((el) => {
+    if (!results.includes(el)) results.push(el);
+  });
 
   // Method 2: Walk all visible elements and check isContentEditable property (catches inherited)
   // Only scan a reasonable depth to avoid performance issues
@@ -342,12 +440,24 @@ export function scanPageForms(): FormField[] {
   const seenSelectors = new Set<string>();
   const processedRadioGroups = new Set<string>();
 
-  // Scan standard form elements
+  // Scan standard form elements（主文档）
   const inputs = document.querySelectorAll(
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
   );
 
-  inputs.forEach((el) => {
+  // 同时收集 Shadow DOM 内的表单元素
+  const shadowInputs = collectShadowFormElements();
+
+  // 合并去重：将 shadowInputs 中不在主文档查询结果中的元素加入
+  const mainInputSet = new Set(inputs);
+  const allInputs: Element[] = Array.from(inputs);
+  shadowInputs.forEach((el) => {
+    if (!mainInputSet.has(el)) {
+      allInputs.push(el);
+    }
+  });
+
+  allInputs.forEach((el) => {
     const htmlEl = el as HTMLElement;
     const type = detectFieldType(htmlEl);
     const label = getLabelForElement(htmlEl);
@@ -499,6 +609,164 @@ export function waitForFormFields(timeoutMs: number = 3000): Promise<FormField[]
 }
 
 // ---------------------------------------------------------------------------
+// 弹窗/模态框/抽屉检测
+// ---------------------------------------------------------------------------
+
+/** 可能触发弹窗/模态框/抽屉的按钮关键词 */
+const MODAL_TRIGGER_KEYWORDS = [
+  '设置', '编辑', '配置', '详情', '查看', '修改', '更多',
+  'setting', 'edit', 'config', 'configure', 'detail', 'more', 'option',
+];
+
+/** 可能表示弹窗/抽屉关闭的按钮关键词 */
+const MODAL_CLOSE_KEYWORDS = [
+  '关闭', '取消', 'close', 'cancel', 'dismiss',
+];
+
+/**
+ * 检测页面上弹窗/模态框/抽屉的触发按钮或关闭按钮。
+ * 返回匹配到的按钮信息列表。
+ */
+export function detectModalOrDrawer(): ModalInfo[] {
+  const results: ModalInfo[] = [];
+  const seen = new Set<string>();
+
+  // 1. 检测当前已打开的弹窗/模态框/抽屉内的关闭按钮
+  const modalSelectors = [
+    '[role="dialog"]', '[aria-modal="true"]',
+    '.modal', '.dialog', '.drawer', '.popup', '.overlay',
+    '[class*="modal"]', '[class*="Modal"]',
+    '[class*="drawer"]', '[class*="Drawer"]',
+    '[class*="overlay"]', '[class*="Overlay"]',
+  ];
+  for (const sel of modalSelectors) {
+    const modals = document.querySelectorAll(sel);
+    modals.forEach((modal) => {
+      // 在弹窗内查找关闭按钮
+      const closeBtns = (modal as HTMLElement).querySelectorAll(
+        'button, [role="button"], a, span, div'
+      );
+      closeBtns.forEach((btn) => {
+        const htmlBtn = btn as HTMLElement;
+        const text = (htmlBtn.textContent || '').trim();
+        const ariaLabel = (htmlBtn.getAttribute('aria-label') || '').trim();
+        const title = (htmlBtn.getAttribute('title') || '').trim();
+        const combined = `${text} ${ariaLabel} ${title}`.toLowerCase();
+        for (const kw of MODAL_CLOSE_KEYWORDS) {
+          if (combined.includes(kw.toLowerCase())) {
+            const selector = getSelector(htmlBtn);
+            if (!seen.has(selector)) {
+              seen.add(selector);
+              results.push({
+                text: text || ariaLabel || title || kw,
+                selector,
+                tagName: htmlBtn.tagName.toLowerCase(),
+              });
+            }
+            break;
+          }
+        }
+      });
+    });
+  }
+
+  // 2. 检测页面上可能触发弹窗的按钮（设置/编辑/配置等）
+  const candidates = document.querySelectorAll('button, a, [role="button"], div, span');
+  candidates.forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    const text = (htmlEl.textContent || '').trim();
+    const ariaLabel = (htmlEl.getAttribute('aria-label') || '').trim();
+    const title = (htmlEl.getAttribute('title') || '').trim();
+    const combined = `${text} ${ariaLabel} ${title}`.toLowerCase();
+    // 仅匹配短文本按钮，避免误匹配大段文字
+    if (text.length > 20) return;
+    for (const kw of MODAL_TRIGGER_KEYWORDS) {
+      if (combined.includes(kw.toLowerCase())) {
+        const selector = getSelector(htmlEl);
+        if (!seen.has(selector)) {
+          seen.add(selector);
+          results.push({
+            text: text || ariaLabel || title || kw,
+            selector,
+            tagName: htmlEl.tagName.toLowerCase(),
+          });
+        }
+        break;
+      }
+    }
+  });
+
+  // 3. 检测 Shadow DOM 中的弹窗触发按钮
+  const allElements = document.querySelectorAll('*');
+  allElements.forEach((el) => {
+    const shadowRoot = (el as HTMLElement).shadowRoot;
+    if (!shadowRoot) return;
+    const shadowButtons = shadowRoot.querySelectorAll('button, [role="button"], a, span, div');
+    shadowButtons.forEach((btn) => {
+      const htmlBtn = btn as HTMLElement;
+      const text = (htmlBtn.textContent || '').trim();
+      if (text.length > 20) return;
+      const ariaLabel = (htmlBtn.getAttribute('aria-label') || '').trim();
+      const title = (htmlBtn.getAttribute('title') || '').trim();
+      const combined = `${text} ${ariaLabel} ${title}`.toLowerCase();
+      for (const kw of MODAL_TRIGGER_KEYWORDS) {
+        if (combined.includes(kw.toLowerCase())) {
+          // Shadow DOM 内元素需要特殊选择器，用最简路径
+          const selector = getSelector(htmlBtn);
+          if (!seen.has(selector)) {
+            seen.add(selector);
+            results.push({
+              text: text || ariaLabel || title || kw,
+              selector,
+              tagName: htmlBtn.tagName.toLowerCase(),
+            });
+          }
+          break;
+        }
+      }
+    });
+  });
+
+  return results.slice(0, 20);
+}
+
+// ---------------------------------------------------------------------------
+// 多层深度扫描策略
+// ---------------------------------------------------------------------------
+
+/**
+ * 执行三级深度扫描：
+ * - Level 1: 标准扫描（当前 scanPageForms，已含 Shadow DOM）
+ * - Level 2: Shadow DOM 专项扫描（已在 scanPageForms 中集成，此处再次确认）
+ * - Level 3: 等待 500ms 后重新扫描（捕获延迟渲染的元素）
+ * 合并去重后返回。
+ */
+export function scanPageFormsDeep(): Promise<FormField[]> {
+  return new Promise((resolve) => {
+    // Level 1 & 2: 立即执行标准扫描（已包含 Shadow DOM 穿透）
+    const level1 = scanPageForms();
+
+    // Level 3: 等待 500ms 后重新扫描，捕获延迟渲染的元素
+    setTimeout(() => {
+      const level3 = scanPageForms();
+
+      // 合并去重：以 selector 为唯一键
+      const merged = new Map<string, FormField>();
+      for (const field of level1) {
+        merged.set(field.selector, field);
+      }
+      for (const field of level3) {
+        if (!merged.has(field.selector)) {
+          merged.set(field.selector, field);
+        }
+      }
+
+      resolve(Array.from(merged.values()));
+    }, 500);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Canvas Spreadsheet Detection & Support
 // ---------------------------------------------------------------------------
 
@@ -621,3 +889,30 @@ export function getSpreadJSColumns(): CanvasColumn[] | null {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Content Script 消息监听：响应 background 转发的扫描请求
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener(
+  (message: { type: string; payload?: any }, sender, sendResponse) => {
+    if (sender.id !== chrome.runtime.id) return false;
+
+    if (message.type === 'EXEC_SCAN_DEEP') {
+      // 同时执行深度扫描和弹窗检测
+      const modals = detectModalOrDrawer();
+      scanPageFormsDeep().then((fields) => {
+        sendResponse({ fields, modals });
+      });
+      return true; // 异步响应
+    }
+
+    if (message.type === 'EXEC_DETECT_MODALS') {
+      const modals = detectModalOrDrawer();
+      sendResponse({ modals });
+      return false;
+    }
+
+    return false;
+  }
+);

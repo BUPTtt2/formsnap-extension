@@ -96,6 +96,44 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'SCAN_FORM_DEEP': {
+        // 深度扫描：转发给 content script 执行三级扫描 + 弹窗检测
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ fields: [], modals: [], error: '未找到活动标签页' });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_SCAN_DEEP' }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ fields: [], modals: [], error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { fields: [], modals: [] });
+            }
+          });
+        });
+        return true;
+      }
+
+      case 'DETECT_MODALS': {
+        // 转发给 content script 检测弹窗/模态框/抽屉
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ modals: [], error: '未找到活动标签页' });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_DETECT_MODALS' }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ modals: [], error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { modals: [] });
+            }
+          });
+        });
+        return true;
+      }
+
       default:
         return false;
     }
