@@ -79,7 +79,11 @@ export type MessageType =
   | 'GET_MAPPING_HISTORY'
   | 'CLICK_NEW_BUTTON'
   | 'SCAN_FORM_DEEP'
-  | 'DETECT_MODALS';
+  | 'DETECT_MODALS'
+  | 'SCAN_TABLE_MODAL'
+  | 'FILL_TABLE_MODAL'
+  | 'ADD_TABLE_ROW'
+  | 'DETECT_PAGE_MODE';
 
 export interface ModalInfo {
   text: string;

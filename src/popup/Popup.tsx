@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { ParsedField, FormField, MappingResult, ExtensionSettings, NewButtonInfo, CanvasSpreadsheetInfo, CanvasColumn, ModalInfo } from '../core/types';
+import { ParsedField, FormField, MappingResult, ExtensionSettings, NewButtonInfo, CanvasSpreadsheetInfo, CanvasColumn, ModalInfo, FieldType } from '../core/types';
 import { sendMessage, sendMessageToTab, getCurrentTab } from '../utils/message';
 import { prepareImageForAI, clipboardToBlob } from '../utils/imageUtils';
 import { parseFile } from '../utils/fileParser';
@@ -42,6 +42,8 @@ export default function Popup() {
   const [manualTargetIdx, setManualTargetIdx] = useState(-1);
   const [modalButtons, setModalButtons] = useState<ModalInfo[] | null>(null);
   const [scanDepth, setScanDepth] = useState<'standard' | 'deep'>('standard');
+  const [pageMode, setPageMode] = useState<string>('standard');
+  const [tableModalData, setTableModalData] = useState<{ headers: string[]; rows: any[]; modalSelector: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const excelFileRef = useRef<HTMLInputElement>(null);
@@ -302,16 +304,70 @@ export default function Popup() {
 
         // Still no fields?
         if (!scanResult.fields?.length) {
-          if (scanResult.newButtons && scanResult.newButtons.length > 0) {
-            setNewButtons(scanResult.newButtons);
-            setStatus({ type: 'info', text: `当前页面没有可填写的表单，检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
-          } else if (modalButtons && modalButtons.length > 0) {
-            setStatus({ type: 'info', text: `未找到表单，但检测到 ${modalButtons.length} 个弹窗/设置按钮，请先点击打开` });
-          } else {
-            setStatus({ type: 'error', text: '当前页面未检测到表单字段。可能需要先点击弹窗或展开编辑区域' });
+          // Try table modal scan (for Coze/Dify/小建工 style variable editors)
+          setStatus({ type: 'loading', text: '尝试检测表格型弹窗...' });
+          try {
+            const tableModalResult = await sendMessage<{ detected: boolean; rows?: any[]; headers?: string[]; modalSelector?: string; error?: string }>(
+              'SCAN_TABLE_MODAL'
+            );
+            if (tableModalResult?.detected && tableModalResult.headers?.length) {
+              // Convert table modal to FormField format using column headers
+              const tableFields: FormField[] = [];
+              const headers = tableModalResult.headers;
+              const rows = tableModalResult.rows || [];
+              
+              // Use column headers as field labels, with the first data row's input selectors
+              for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+                const headerName = headers[colIdx];
+                // Find the first row's input for this column
+                let selector = '';
+                let cellType = 'text';
+                for (const row of rows) {
+                  const cell = row.cells?.find((c: any) => c.colIndex === colIdx);
+                  if (cell?.element) {
+                    selector = cell.selector;
+                    cellType = cell.type || 'text';
+                    break;
+                  }
+                }
+                if (selector) {
+                  const fieldType: FieldType = cellType === 'toggle' ? 'checkbox' : cellType === 'select' ? 'select' : cellType === 'textarea' ? 'textarea' : 'text';
+                  tableFields.push({
+                    label: headerName,
+                    selector,
+                    type: fieldType,
+                  });
+                }
+              }
+
+              if (tableFields.length > 0) {
+                scanResult = { ...scanResult, fields: tableFields };
+                // Store table modal info for later use in filling
+                setPageMode('table-modal');
+                setTableModalData({
+                  headers: tableModalResult.headers,
+                  rows: tableModalResult.rows || [],
+                  modalSelector: tableModalResult.modalSelector || '',
+                });
+              }
+            }
+          } catch (tableErr) {
+            // Table modal scan failed, continue
           }
-          setLoading(false);
-          return;
+
+          // If still no fields after all attempts
+          if (!scanResult.fields?.length) {
+            if (scanResult.newButtons && scanResult.newButtons.length > 0) {
+              setNewButtons(scanResult.newButtons);
+              setStatus({ type: 'info', text: `当前页面没有可填写的表单，检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
+            } else if (modalButtons && modalButtons.length > 0) {
+              setStatus({ type: 'info', text: `未找到表单，但检测到 ${modalButtons.length} 个弹窗/设置按钮，请先点击打开` });
+            } else {
+              setStatus({ type: 'error', text: '当前页面未检测到表单字段。可能需要先点击弹窗或展开编辑区域' });
+            }
+            setLoading(false);
+            return;
+          }
         }
       }
 
@@ -643,6 +699,42 @@ export default function Popup() {
       try {
         await sendMessage('SAVE_MAPPING_HISTORY', { urlPattern: 'canvas-fill', mappings: confirmedMappings });
       } catch {}
+      return;
+    }
+
+    // Table Modal fill mode (for Coze/Dify/小建工 style editors)
+    if (pageMode === 'table-modal' && tableModalData) {
+      setStatus({ type: 'loading', text: '正在填写表格弹窗（Agent 模式）...' });
+      setStep('filling');
+      try {
+        // Build fill mappings for table modal: sourceField → headerName
+        const tableMappings = confirmedMappings.map((m) => ({
+          sourceField: m.sourceField.field,
+          value: m.sourceField.value,
+          targetHeader: m.targetField.label, // Use header name as target
+        }));
+
+        const result = await sendMessage<{ total: number; success: number; failed: number; error?: string }>(
+          'FILL_TABLE_MODAL',
+          { mappings: tableMappings, tableInfo: tableModalData }
+        );
+
+        if (result.error) throw new Error(result.error);
+        setFillResult({ total: result.total || confirmedMappings.length, success: result.success || 0, failed: result.failed || 0 });
+        setCanUndo(false); // Table modal fill uses React native setter, undo not supported
+        setStep('done');
+        setStatus({ type: 'success', text: `表格填写完成：${result.success || 0}/${confirmedMappings.length} 个字段成功` });
+
+        // Save history
+        try {
+          const tab = await getCurrentTab();
+          const url = (await sendMessageToTab<{ url: string }>(tab.id!, 'SCAN_FORM')).url;
+          await sendMessage('SAVE_MAPPING_HISTORY', { urlPattern: url, mappings: confirmedMappings });
+        } catch {}
+      } catch (err: any) {
+        setStatus({ type: 'error', text: '表格填写失败: ' + (err.message || '请确认弹窗已打开') });
+        setStep('mapping');
+      }
       return;
     }
 
