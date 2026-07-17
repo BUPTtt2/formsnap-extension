@@ -831,11 +831,15 @@ export async function fillRowByRowAgent(
 ): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
   const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
 
+  // Snapshot current input count before we start
+  let prevInputCount = 0;
+  let prevToggleCount = 0;
+
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
     const rowData = dataRows[rowIdx];
     try {
-      // 1. 如果不是第一行，点击"+ 新增"按钮
       if (rowIdx > 0) {
+        // Click "+ 新增" button
         let added = false;
         if (addButtonSelector) {
           const btn = document.querySelector(addButtonSelector) as HTMLElement | null;
@@ -847,14 +851,13 @@ export async function fillRowByRowAgent(
           }
         }
         if (!added) {
-          // 自动查找 "+ 新增" 按钮
           const addButtons = document.querySelectorAll(
             'button, a, span, div[role="button"], [class*="add"], [class*="Add"], [class*="new"], [class*="New"]'
           );
           for (const btn of Array.from(addButtons)) {
             const el = btn as HTMLElement;
             const text = el.textContent?.trim() || '';
-            if (text.match(/^[+＋]\s*新增|^新增|^[+＋]\s*Add|^Add|^新增|^添加|^创建/)) {
+            if (text.match(/^[+＋]\s*新增|^新增|^[+＋]\s*Add|^Add|^添加|^创建/)) {
               el.scrollIntoView({ behavior: 'smooth', block: 'center' });
               await delay(300);
               el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
@@ -869,38 +872,54 @@ export async function fillRowByRowAgent(
           result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
           continue;
         }
-        // 等待新行渲染
+        // Wait for new row to render
         await delay(1000);
+      } else {
+        // First row: snapshot current counts (this row already exists)
+        const allInputs = getAllRowInputs();
+        const allToggles = getAllToggles();
+        prevInputCount = allInputs.length;
+        prevToggleCount = allToggles.length;
       }
 
-      // 2. 扫描当前可见的输入框（只取可见的、在弹窗/表格内的）
-      const visibleInputs = findCurrentRowInputs();
+      // Scan inputs: only get the NEW ones (after prevInputCount)
+      const allInputsNow = getAllRowInputs();
+      const newInputs = allInputsNow.slice(prevInputCount);
+      const newToggleCount = getAllToggles().length;
+      // For toggles: use the last N toggles that appeared after the previous row
 
-      // 3. 逐字段填写
       let rowFilled = 0;
+      let inputIdx = 0;
+      let toggleIdx = 0;
+
       for (const field of rowData) {
         if (field.type === 'checkbox' || field.type === 'toggle') {
-          // 查找对应的开关元素
-          const toggleEl = findToggleElement(visibleInputs, field.colName);
-          if (toggleEl) {
+          const allTogglesNow = getAllToggles();
+          if (toggleIdx < allTogglesNow.length - prevToggleCount) {
+            const toggleEl = allTogglesNow[prevToggleCount + toggleIdx];
             fillToggle(toggleEl, field.value);
             rowFilled++;
+            toggleIdx++;
             await delay(100);
           }
           continue;
         }
 
-        // 找到对应的输入框（按顺序匹配或按标签匹配）
-        const inputEl = findInputForColumn(visibleInputs, field.colName, rowData.indexOf(field));
-        if (inputEl) {
+        if (inputIdx < newInputs.length) {
+          const inputEl = newInputs[inputIdx];
           setNativeValue(inputEl, field.value);
           (inputEl as HTMLInputElement)?.focus?.();
           rowFilled++;
+          inputIdx++;
           await delay(150);
         } else {
           result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框`);
         }
       }
+
+      // Update prev counts for next iteration
+      prevInputCount = allInputsNow.length;
+      prevToggleCount = getAllToggles().length;
 
       if (rowFilled > 0) result.filledRows++;
       await delay(200);
@@ -913,12 +932,10 @@ export async function fillRowByRowAgent(
 }
 
 /**
- * 查找当前行的所有可见输入元素。
- * 策略：获取所有 input/textarea/select/contenteditable，按 DOM 顺序排列。
+ * 获取弹窗内所有可见输入元素，按 DOM 顺序排列。
  */
-function findCurrentRowInputs(): HTMLElement[] {
+function getAllRowInputs(): HTMLElement[] {
   const inputs: HTMLElement[] = [];
-  // 查找弹窗内的输入
   const modals = findVisibleModals();
   const scope = modals.length > 0 ? modals[0] : document.body;
 
@@ -939,51 +956,24 @@ function findCurrentRowInputs(): HTMLElement[] {
 }
 
 /**
- * 根据列名或列索引找到对应的输入框。
+ * 获取弹窗内所有开关元素。
  */
-function findInputForColumn(inputs: HTMLElement[], colName: string, colIndex: number): HTMLElement | null {
-  // 策略1：按字符计数匹配（0/50 表示 50 字符限制的输入框）
-  // 策略2：按列索引匹配（第 N 个输入框对应第 N 列）
-  // 名称=第1个, 描述=第2个, 默认值=第3个
-
-  const colOrder = ['名称', '描述', '默认值', 'name', 'desc', 'description', 'default', 'value'];
-  const nameIdx = colOrder.indexOf(colName.toLowerCase());
-
-  if (nameIdx >= 0 && nameIdx < inputs.length) {
-    return inputs[nameIdx];
-  }
-  // 按列索引直接取
-  if (colIndex < inputs.length) {
-    return inputs[colIndex];
-  }
-  return null;
-}
-
-/**
- * 查找对应的开关/复选框元素。
- */
-function findToggleElement(inputs: HTMLElement[], colName: string): HTMLElement | null {
+function getAllToggles(): HTMLElement[] {
   const modals = findVisibleModals();
   const scope = modals.length > 0 ? modals[0] : document.body;
 
-  // 查找所有开关
-  const toggles = scope.querySelectorAll(
+  const toggles: HTMLElement[] = [];
+  scope.querySelectorAll(
     '[role="switch"], .ant-switch, .el-switch, [class*="switch"]'
-  );
+  ).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (isVisible(htmlEl)) toggles.push(htmlEl);
+  });
 
-  if (toggles.length === 0) return null;
-
-  // 按列名匹配：支持Prompt=第1个开关, 支持工作流=第2个开关
-  const toggleOrder = ['支持prompt', '支持工作流', '清除上下文'];
-  const toggleIdx = toggleOrder.indexOf(colName.toLowerCase().replace(/\s/g, ''));
-
-  if (toggleIdx >= 0 && toggleIdx < toggles.length) {
-    return toggles[toggleIdx] as HTMLElement;
-  }
-  return null;
+  return toggles;
 }
 
-// ========================== 7. 消息监听 ==========================
+/**
 
 /**
  * 常量：消息类型枚举
