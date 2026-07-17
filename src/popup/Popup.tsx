@@ -316,6 +316,7 @@ export default function Popup() {
               const tableFields: FormField[] = [];
               const headers = tableModalResult.headers;
               const rows = tableModalResult.rows || [];
+              const isEmptyTable = rows.length === 0;
               
               // Use column headers as field labels, with the first data row's input selectors
               for (let colIdx = 0; colIdx < headers.length; colIdx++) {
@@ -337,6 +338,13 @@ export default function Popup() {
                     label: headerName,
                     selector,
                     type: fieldType,
+                  });
+                } else if (isEmptyTable && headerName) {
+                  // 表格为空时仍创建字段（用列头名称），selector 为空表示需要先新增行
+                  tableFields.push({
+                    label: headerName,
+                    selector: '__needs_new_row__',
+                    type: 'text',
                   });
                 }
               }

@@ -406,8 +406,9 @@ function scanModalForTable(modal: HTMLElement): Omit<TableModalInfo, 'modalSelec
     }
   });
 
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && headers.length < 2) return null;
 
+  // 即使没有数据行，只要有有效的列头就返回（用户需要先"新增"行）
   return { detected: true, rows, headers };
 }
 
