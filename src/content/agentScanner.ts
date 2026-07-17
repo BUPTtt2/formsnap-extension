@@ -126,6 +126,21 @@ function findVisibleModals(): HTMLElement[] {
     '[class*="modal"]',
     '[class*="Drawer"]',
     '[class*="drawer"]',
+    // Coze / Dify / 小建工 style dialogs
+    '[class*="dialog-content"]',
+    '[class*="Dialog-content"]',
+    '[class*="popup-content"]',
+    '[class*="Popup-content"]',
+    '[class*="panel-content"]',
+    '[class*="Panel-content"]',
+    '[class*="slide-panel"]',
+    '[class*="SlidePanel"]',
+    '[class*="side-panel"]',
+    '[class*="SidePanel"]',
+    '[class*="edit-panel"]',
+    '[class*="EditPanel"]',
+    '[class*="form-modal"]',
+    '[class*="form-drawer"]',
   ];
   const modals: HTMLElement[] = [];
   for (const sel of selectors) {
@@ -160,6 +175,24 @@ function findVisibleModals(): HTMLElement[] {
     });
   } catch {
     // 忽略
+  }
+
+  // 额外策略：找 position:fixed 的容器（可能是弹窗背景后面）
+  if (modals.length === 0) {
+    try {
+      const fixedEls = document.querySelectorAll('*');
+      for (const el of Array.from(fixedEls)) {
+        const htmlEl = el as HTMLElement;
+        const style = window.getComputedStyle(htmlEl);
+        if (style.position === 'fixed' && style.zIndex && parseInt(style.zIndex) > 100) {
+          const rect = htmlEl.getBoundingClientRect();
+          if (rect.width > 300 && rect.height > 200 && isVisible(htmlEl)) {
+            modals.push(htmlEl);
+            break; // 只取第一个大的 fixed 元素
+          }
+        }
+      }
+    } catch {}
   }
 
   return modals;

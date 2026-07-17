@@ -20,6 +20,8 @@ export default function Popup() {
   const [targetImages, setTargetImages] = useState<string[]>([]);
   const [targetPreviews, setTargetPreviews] = useState<string[]>([]);
   const [textContent, setTextContent] = useState('');
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<{ key: string; data: any; label: string; timestamp: number; type: string }[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileData, setFileData] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -935,6 +937,46 @@ export default function Popup() {
     setLoading(false);
   }, [parsedFields]);
 
+  // Load history
+  const handleLoadHistory = useCallback(async () => {
+    try {
+      const entries = await sendMessage<{ key: string; data: any; label: string; timestamp: number; type: string }[]>('GET_MAPPING_HISTORY', {});
+      setHistoryEntries(entries || []);
+      setShowHistory(true);
+    } catch {}
+  }, []);
+
+  // Restore from history entry
+  const handleRestoreHistory = useCallback((entry: { key: string; data: any }) => {
+    if (entry.data.parsedFields) {
+      setParsedFields(entry.data.parsedFields);
+      setStep(entry.data.step === 'data-review' ? 'data-review' : 'input');
+      setShowHistory(false);
+      setStatus({ type: 'success', text: '已恢复历史记录' });
+    }
+  }, []);
+
+  // Save current data to manual slot
+  const handleSaveManual = useCallback(async (slot: number) => {
+    const label = prompt('请输入保存名称（可选）：') || `手动保存 ${slot + 1}`;
+    await sendMessage('SAVE_MAPPING_HISTORY', {
+      type: 'manual', slot, label,
+      data: { parsedFields, textContent, step },
+    });
+    setStatus({ type: 'success', text: `已保存到手动槽位 ${slot + 1}` });
+  }, [parsedFields, textContent]);
+
+  // Auto-save after successful fill
+  useEffect(() => {
+    if (step === 'done' && parsedFields.length > 0) {
+      sendMessage('SAVE_MAPPING_HISTORY', {
+        type: 'auto',
+        label: `${parsedFields.length} 个字段`,
+        data: { parsedFields, textContent },
+      }).catch(() => {});
+    }
+  }, [step]);
+
   const handleReset = () => {
     setStep('input'); setImagePreviews([]); setImagesBase64([]); setTextContent('');
     setParsedFields([]); setParsedRows([]); setFormFields([]); setMappings([]); setFillResult(null);
@@ -1001,9 +1043,60 @@ export default function Popup() {
       <div className="header">
         <h1>FormSnap</h1>
         <div className="header-actions">
+          <button className="icon-btn" onClick={handleLoadHistory} title="查看历史">📁</button>
           <button className="icon-btn" onClick={openSettings} title="设置">⚙</button>
         </div>
       </div>
+
+      {/* History Panel */}
+      {showHistory && (
+        <div style={{ marginBottom: 12, padding: '10px', background: 'rgba(59,130,246,0.04)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#374151' }}>历史记录</span>
+            <div>
+              <button className="icon-btn" onClick={() => setShowHistory(false)} style={{ fontSize: 14 }}>✕</button>
+            </div>
+          </div>
+          {historyEntries.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>暂无历史记录</div>
+          ) : (
+            <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+              {historyEntries.map((entry) => (
+                <div key={entry.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f3f4f6', fontSize: 11 }}>
+                  <div>
+                    <div style={{ color: '#374151', fontWeight: 500 }}>{entry.label || (entry.type === 'auto' ? '自动保存' : '手动保存')}</div>
+                    <div style={{ color: '#9ca3af', fontSize: 10 }}>{new Date(entry.timestamp).toLocaleString()} · {entry.data.parsedFields?.length || 0} 字段</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 8px' }}
+                      onClick={() => handleRestoreHistory(entry)}>恢复</button>
+                    {entry.type === 'manual' && (
+                      <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 8px', color: '#ef4444', borderColor: '#fca5a5' }}
+                        onClick={async () => { await sendMessage('DELETE_HISTORY_ENTRY', { key: entry.key }); handleLoadHistory(); }}>删除</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Manual save slots */}
+          <div style={{ marginTop: 8, borderTop: '1px solid #e5e7eb', paddingTop: 8 }}>
+            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>手动保存槽位：</div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[0, 1, 2].map((slot) => {
+                const existing = historyEntries.find((e) => e.key === `history_manual_${slot}`);
+                return (
+                  <button key={slot} className="btn btn-outline" style={{ flex: 1, fontSize: 10, padding: '4px' }}
+                    onClick={() => existing ? handleRestoreHistory(existing) : handleSaveManual(slot)}
+                    disabled={parsedFields.length === 0 && !existing}>
+                    {existing ? `槽${slot + 1}: ${existing.label.slice(0, 6)}` : `保存到槽${slot + 1}`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {apiKeyMissing && inputMode !== 'file' && (
         <div className="status-bar error" style={{ marginBottom: 10 }}>

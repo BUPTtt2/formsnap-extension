@@ -86,7 +86,8 @@ export type MessageType =
   | 'DETECT_PAGE_MODE'
   | 'FILL_TABLE_MULTI_ROW'
   | 'AI_MATCH_FIELDS'
-  | 'FILL_ROW_BY_ROW';
+  | 'FILL_ROW_BY_ROW'
+  | 'DELETE_HISTORY_ENTRY';
 
 export interface ModalInfo {
   text: string;

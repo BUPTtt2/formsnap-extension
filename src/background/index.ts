@@ -61,38 +61,59 @@ chrome.runtime.onMessage.addListener(
       }
 
       case 'SAVE_MAPPING_HISTORY': {
-        if (!message.payload || !message.payload.urlPattern || !message.payload.mappings) {
+        if (!message.payload) {
           sendResponse({ success: false, error: 'Invalid payload' });
           return false;
         }
-        const { urlPattern, mappings } = message.payload;
-        // Use timestamp-based unique key for each fill operation
-        const key = `mapping_history_${Date.now()}`;
-        const entry: MappingHistoryEntry = { urlPattern, mappings, timestamp: Date.now() };
+        const { type, data, label } = message.payload;
+        const key = type === 'manual'
+          ? `history_manual_${message.payload.slot || 0}`
+          : `history_auto_${Date.now()}`;
+        const entry = { data, label: label || '', timestamp: Date.now(), type };
         chrome.storage.local.set({ [key]: entry }, () => {
-          // Prune old entries: keep only the latest 50
-          chrome.storage.local.get(null, (all) => {
-            const historyKeys = Object.keys(all).filter((k) => k.startsWith('mapping_history_')).sort();
-            if (historyKeys.length > 50) {
-              const toRemove = historyKeys.slice(0, historyKeys.length - 50);
-              chrome.storage.local.remove(toRemove);
-            }
-          });
+          if (type === 'auto') {
+            // Auto-save: keep only latest 3
+            chrome.storage.local.get(null, (all) => {
+              const autoKeys = Object.keys(all)
+                .filter((k) => k.startsWith('history_auto_'))
+                .sort();
+              if (autoKeys.length > 3) {
+                chrome.storage.local.remove(autoKeys.slice(0, autoKeys.length - 3));
+              }
+            });
+          }
           sendResponse({ success: true });
         });
         return true;
       }
 
       case 'GET_MAPPING_HISTORY': {
-        if (!message.payload || !message.payload.urlPattern) {
-          sendResponse(null);
-          return false;
-        }
-        const { urlPattern } = message.payload;
-        const key = `mapping_history_${urlPattern}`;
-        chrome.storage.local.get(key, (result) => {
-          sendResponse(result[key] || null);
+        chrome.storage.local.get(null, (all) => {
+          const entries: { key: string; data: any; label: string; timestamp: number; type: string }[] = [];
+          // Auto entries (latest 3)
+          Object.keys(all)
+            .filter((k) => k.startsWith('history_auto_'))
+            .sort()
+            .reverse()
+            .slice(0, 3)
+            .forEach((k) => {
+              entries.push({ key: k, ...all[k] });
+            });
+          // Manual entries (3 slots)
+          for (let i = 0; i < 3; i++) {
+            const k = `history_manual_${i}`;
+            if (all[k]) {
+              entries.push({ key: k, ...all[k] });
+            }
+          }
+          sendResponse(entries);
         });
+        return true;
+      }
+
+      case 'DELETE_HISTORY_ENTRY': {
+        const { key } = message.payload;
+        chrome.storage.local.remove(key, () => sendResponse({ success: true }));
         return true;
       }
 
