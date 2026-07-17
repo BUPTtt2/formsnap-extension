@@ -111,11 +111,29 @@ function getLabelForElement(el: HTMLElement): string {
   // Strategy 0.5: Table cell - extract column header from table structure
   const cell = el.closest('td, th, [role="cell"], [role="gridcell"]');
   if (cell) {
+    // Check data attributes on the cell itself (Ant Design, etc.)
+    const cellDataField = cell.getAttribute('data-field') || cell.getAttribute('data-index') || cell.getAttribute('data-key');
+    if (cellDataField) return cellDataField.trim();
+
+    const cellTitle = cell.getAttribute('title');
+    if (cellTitle) return cellTitle.trim();
+
     const row = cell.parentElement;
     if (row) {
       const cellIndex = Array.from(row.children).indexOf(cell);
       const table = cell.closest('table, [role="grid"], [role="table"]');
       if (table) {
+        // Try colgroup
+        const colgroup = table.querySelector('colgroup');
+        if (colgroup) {
+          const cols = colgroup.querySelectorAll('col');
+          const col = cols[cellIndex];
+          if (col) {
+            const colTitle = col.getAttribute('title') || col.getAttribute('data-title') || col.getAttribute('data-field');
+            if (colTitle) return colTitle.trim();
+          }
+        }
+
         const allRows = table.querySelectorAll('tr, [role="row"]');
         // Look for header row (<th> or role="columnheader")
         for (const headerRow of allRows) {
@@ -177,6 +195,15 @@ function getLabelForElement(el: HTMLElement): string {
     const refEl = document.getElementById(labelledBy);
     if (refEl) return refEl.textContent?.trim() || '';
   }
+
+  // Element's own data attributes
+  const dataField = el.getAttribute('data-field') || el.getAttribute('data-name') || el.getAttribute('data-key');
+  if (dataField) return dataField.trim();
+
+  // Title attribute
+  const titleAttr = el.getAttribute('title');
+  if (titleAttr) return titleAttr.trim();
+
   const placeholder = (el as HTMLInputElement).placeholder;
   if (placeholder) return placeholder.trim();
   const name = (el as HTMLInputElement).name;

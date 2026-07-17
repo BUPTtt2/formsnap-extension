@@ -1137,8 +1137,8 @@ export default function Popup() {
 
           {/* Unmatched source fields that have no target column */}
           {mappings.some((m) => !m.targetField.selector && m.status === 'unmatched') && (
-            <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 6, fontSize: 11, color: '#ef4444' }}>
-              以下数据源字段在当前表格中<strong>无对应列</strong>，已自动跳过
+            <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 6, fontSize: 11, color: '#b45309' }}>
+              以下数据源字段未自动匹配，请从下拉框中手动选择目标位置，勾选后 Agent 自动填写
             </div>
           )}
 
@@ -1166,8 +1166,8 @@ export default function Popup() {
                       </span>
                     </div>
                   ) : (
-                    <div className="mapping-target" style={{ color: '#ef4444', fontSize: 11 }}>
-                      （当前页面无对应列）
+                    <div className="mapping-target" style={{ color: '#b45309', fontSize: 11 }}>
+                      （未匹配，请从下方下拉框选择）
                     </div>
                   )}
                   {/* Always show target selector dropdown for manual mapping */}
