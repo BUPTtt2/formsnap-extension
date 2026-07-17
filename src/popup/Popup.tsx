@@ -393,22 +393,16 @@ export default function Popup() {
         }
       }
 
-      // Match quality check: if scanned fields poorly match data source, fall back to virtual mode
+      // Match quality check: if scanned fields poorly match data source, enable manual mapping mode
       if (scanResult.fields?.length && fields.length > 0) {
         const preMatch = clientSideMatch(fields, scanResult.fields);
         const matchedCount = preMatch.filter((m) => m.confidence >= 0.5 && m.targetField.selector).length;
         const matchRate = matchedCount / fields.length;
 
         if (matchRate < 0.3 && !scanResult.canvasInfo?.detected && pageMode !== 'table-modal') {
-          // Less than 30% of source fields have a decent match → use virtual mode
-          setStatus({ type: 'info', text: `扫描到的 ${scanResult.fields.length} 个字段与数据源匹配度过低（${Math.round(matchRate * 100)}%），切换为虚拟字段模式` });
-          const virtualFields: FormField[] = fields.map((f, i) => ({
-            label: f.field,
-            selector: `__virtual_${i}`,
-            type: f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'select' ? 'select' : f.type === 'checkbox' ? 'checkbox' : f.type === 'radio' ? 'radio' : 'text',
-          }));
-          scanResult = { ...scanResult, fields: virtualFields };
-          setPageMode('virtual-manual');
+          // Low match rate → enable manual mapping mode (keep original scanned fields)
+          setStatus({ type: 'info', text: `自动匹配度较低（${Math.round(matchRate * 100)}%），请手动指定每个字段的目标位置` });
+          setPageMode('manual-mapping');
         }
       }
 
@@ -1079,6 +1073,16 @@ export default function Popup() {
             <span className="mapping-count">{mappings.filter((m) => m.userConfirmed && m.targetField.selector).length}/{mappings.filter((m) => m.targetField.selector).length} 已确认</span>
           </div>
 
+          {/* Manual mapping mode hint */}
+          {pageMode === 'manual-mapping' && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8, fontSize: 12 }}>
+              <div style={{ marginBottom: 6, fontWeight: 600, color: '#7c3aed' }}>📋 手动映射模式</div>
+              <div style={{ color: 'var(--muted)' }}>
+                自动匹配度较低。请在每个字段旁的下拉框中手动选择对应的页面填写位置，确认后 Agent 将自动填写。
+              </div>
+            </div>
+          )}
+
           {/* Canvas spreadsheet: manual column input */}
           {pageMode === 'virtual-manual' && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8, fontSize: 12 }}>
@@ -1100,16 +1104,15 @@ export default function Popup() {
                 当前页面使用 Canvas 渲染（{canvasInfo.engine === 'spreadjs' ? 'SpreadJS' : '通用'}），无法自动扫描列名。
               </div>
               <div style={{ marginBottom: 8, padding: '6px 10px', background: 'rgba(255,165,0,0.08)', border: '1px solid rgba(255,165,0,0.2)', borderRadius: 6, fontSize: 11, color: '#b45309' }}>
-                ⚠️ 填写前请先在表格中<strong>点击要填写的起始单元格</strong>
+                填写前请先在表格中<strong>点击要填写的起始单元格</strong>
               </div>
-              {/* Screenshot scan button */}
               <button
                 className="btn btn-primary"
                 style={{ width: '100%', marginBottom: 8, fontSize: 12, padding: '6px', opacity: scanningColumns ? 0.6 : 1 }}
                 onClick={scanColumnsFromImage}
                 disabled={scanningColumns}
               >
-                {scanningColumns ? '🔍 正在识别...' : '📸 截图当前页面，AI 自动识别列名'}
+                {scanningColumns ? '正在识别...' : '截图当前页面，AI 自动识别列名'}
               </button>
               <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>或手动输入：</div>
               <div style={{ display: 'flex', gap: 6 }}>
@@ -1167,6 +1170,28 @@ export default function Popup() {
                     <div className="mapping-target" style={{ color: '#ef4444', fontSize: 11 }}>
                       （当前页面无对应列）
                     </div>
+                  )}
+                  {/* Show target selector dropdown for unmatched fields or in manual-mapping mode */}
+                  {(pageMode === 'manual-mapping' || !m.targetField.selector) && (
+                    <select
+                      value={m.targetField.selector || ''}
+                      onChange={(e) => { if (e.target.value) selectTarget(i, e.target.value); }}
+                      style={{
+                        marginTop: 4,
+                        width: '100%',
+                        padding: '3px 6px',
+                        borderRadius: 4,
+                        border: '1px solid #d1d5db',
+                        fontSize: 11,
+                        color: '#374151',
+                        background: m.targetField.selector ? '#f0fdf4' : '#fff',
+                      }}
+                    >
+                      <option value="">-- 选择目标位置 --</option>
+                      {formFields.map((f) => (
+                        <option key={f.selector} value={f.selector}>{f.label}{f.placeholder ? ` (${f.placeholder})` : ''}{f.type !== 'text' ? ` [${f.type}]` : ''}</option>
+                      ))}
+                    </select>
                   )}
                 </div>
               </div>
