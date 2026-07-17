@@ -393,19 +393,6 @@ export default function Popup() {
         }
       }
 
-      // Match quality check: if scanned fields poorly match data source, enable manual mapping mode
-      if (scanResult.fields?.length && fields.length > 0) {
-        const preMatch = clientSideMatch(fields, scanResult.fields);
-        const matchedCount = preMatch.filter((m) => m.confidence >= 0.5 && m.targetField.selector).length;
-        const matchRate = matchedCount / fields.length;
-
-        if (matchRate < 0.3 && !scanResult.canvasInfo?.detected && pageMode !== 'table-modal') {
-          // Low match rate → enable manual mapping mode (keep original scanned fields)
-          setStatus({ type: 'info', text: `自动匹配度较低（${Math.round(matchRate * 100)}%），请手动指定每个字段的目标位置` });
-          setPageMode('manual-mapping');
-        }
-      }
-
       await proceedWithScanResult(fields, scanResult);
     } catch (err: any) {
       setStatus({ type: 'error', text: err.message || '处理失败' });
@@ -1083,6 +1070,18 @@ export default function Popup() {
             </div>
           )}
 
+          {/* Scanned page fields overview */}
+          <div style={{ marginBottom: 12, padding: '8px 10px', background: 'rgba(59,130,246,0.04)', border: '1px solid rgba(59,130,246,0.12)', borderRadius: 8, fontSize: 11 }}>
+            <div style={{ marginBottom: 4, fontWeight: 600, color: '#2563eb' }}>页面上检测到 {formFields.length} 个可填写位置</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {formFields.map((f) => (
+                <span key={f.selector} style={{ background: 'rgba(59,130,246,0.08)', padding: '2px 8px', borderRadius: 4, color: '#374151', fontSize: 11 }}>
+                  {f.label || f.placeholder || '空'}{f.type !== 'text' ? ` [${f.type}]` : ''}
+                </span>
+              ))}
+            </div>
+          </div>
+
           {/* Canvas spreadsheet: manual column input */}
           {pageMode === 'virtual-manual' && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8, fontSize: 12 }}>
@@ -1171,28 +1170,26 @@ export default function Popup() {
                       （当前页面无对应列）
                     </div>
                   )}
-                  {/* Show target selector dropdown for unmatched fields or in manual-mapping mode */}
-                  {(pageMode === 'manual-mapping' || !m.targetField.selector) && (
-                    <select
-                      value={m.targetField.selector || ''}
-                      onChange={(e) => { if (e.target.value) selectTarget(i, e.target.value); }}
-                      style={{
-                        marginTop: 4,
-                        width: '100%',
-                        padding: '3px 6px',
-                        borderRadius: 4,
-                        border: '1px solid #d1d5db',
-                        fontSize: 11,
-                        color: '#374151',
-                        background: m.targetField.selector ? '#f0fdf4' : '#fff',
-                      }}
-                    >
-                      <option value="">-- 选择目标位置 --</option>
-                      {formFields.map((f) => (
-                        <option key={f.selector} value={f.selector}>{f.label}{f.placeholder ? ` (${f.placeholder})` : ''}{f.type !== 'text' ? ` [${f.type}]` : ''}</option>
-                      ))}
-                    </select>
-                  )}
+                  {/* Always show target selector dropdown for manual mapping */}
+                  <select
+                    value={m.targetField.selector || ''}
+                    onChange={(e) => { if (e.target.value) selectTarget(i, e.target.value); }}
+                    style={{
+                      marginTop: 4,
+                      width: '100%',
+                      padding: '3px 6px',
+                      borderRadius: 4,
+                      border: '1px solid #d1d5db',
+                      fontSize: 11,
+                      color: '#374151',
+                      background: m.targetField.selector ? '#f0fdf4' : '#fff',
+                    }}
+                  >
+                    <option value="">-- 选择目标位置 --</option>
+                    {formFields.map((f) => (
+                      <option key={f.selector} value={f.selector}>{f.label}{f.placeholder ? ` (${f.placeholder})` : ''}{f.type !== 'text' ? ` [${f.type}]` : ''}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
             ))}

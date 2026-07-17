@@ -571,29 +571,15 @@ export function scanPageForms(): FormField[] {
   const seenSelectors = new Set<string>();
   const processedRadioGroups = new Set<string>();
 
-  // 1. Detect active modal/dialog
-  const activeModal = findActiveModal();
-  const isModalMode = !!activeModal;
+  // Scan standard form elements (full page)
+  const inputs = document.querySelectorAll(
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
+  );
 
-  // 2. Scan standard form elements within scope
-  let inputs: NodeListOf<Element>;
-  if (activeModal) {
-    inputs = activeModal.querySelectorAll(
-      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
-    );
-  } else {
-    inputs = document.querySelectorAll(
-      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
-    );
-  }
+  // Collect Shadow DOM form elements
+  const shadowInputs = collectShadowFormElements();
 
-  // 3. Collect Shadow DOM form elements (filter by modal scope if in modal mode)
-  const shadowInputs = collectShadowFormElements().filter((el) => {
-    if (isModalMode) return activeModal!.contains(el) || activeModal!.querySelector(`[id="${CSS.escape(el.id)}"]`) !== null;
-    return true;
-  });
-
-  // 4. Merge and deduplicate
+  // Merge and deduplicate
   const mainInputSet = new Set(inputs);
   const allInputs: Element[] = Array.from(inputs);
   shadowInputs.forEach((el) => {
@@ -640,11 +626,8 @@ export function scanPageForms(): FormField[] {
     fields.push(field);
   });
 
-  // 5. Scan contenteditable elements (scoped to modal if in modal mode)
-  const editables = findAllEditableElements().filter((el) => {
-    if (isModalMode) return activeModal!.contains(el);
-    return true;
-  });
+  // Scan contenteditable elements
+  const editables = findAllEditableElements();
   const seenElements = new Set<Element>();
 
   editables.forEach((el) => {
@@ -680,83 +663,6 @@ export function scanPageForms(): FormField[] {
       tagName: htmlEl.tagName.toLowerCase(),
     });
   });
-
-  // Fallback: if modal scan returned empty, retry with full page scan
-  if (isModalMode && fields.length === 0) {
-    const fallbackInputs = document.querySelectorAll(
-      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
-    );
-    const fallbackShadow = collectShadowFormElements();
-    const fallbackAll: Element[] = Array.from(fallbackInputs);
-    fallbackShadow.forEach((el) => {
-      if (!fallbackAll.includes(el)) fallbackAll.push(el);
-    });
-
-    fallbackAll.forEach((el) => {
-      const htmlEl = el as HTMLElement;
-      const type = detectFieldType(htmlEl);
-      const label = getLabelForElement(htmlEl);
-
-      if (type === 'radio') {
-        const name = (el as HTMLInputElement).name;
-        if (!name || processedRadioGroups.has(name)) return;
-        processedRadioGroups.add(name);
-        const selector = `input[type="radio"][name="${CSS.escape(name)}"]`;
-        if (seenSelectors.has(selector)) return;
-        seenSelectors.add(selector);
-        fields.push({
-          selector, label, type: 'radio', name,
-          options: getRadioGroupOptions(name),
-          radioGroup: name,
-        });
-        return;
-      }
-
-      const selector = getSelector(htmlEl);
-      if (seenSelectors.has(selector)) return;
-      seenSelectors.add(selector);
-
-      const field: FormField = {
-        selector, label, type,
-        name: (el as HTMLInputElement).name || undefined,
-        id: el.id || undefined,
-        placeholder: (el as HTMLInputElement).placeholder || undefined,
-        tagName: el.tagName.toLowerCase(),
-      };
-      if (type === 'select') {
-        field.options = getOptionsForSelect(el as HTMLSelectElement);
-      }
-      fields.push(field);
-    });
-
-    // Also scan editables
-    const fallbackEditables = findAllEditableElements();
-    fallbackEditables.forEach((el) => {
-      if (seenElements.has(el)) return;
-      seenElements.add(el);
-      const htmlEl = el as HTMLElement;
-      if (htmlEl.closest('input, textarea, select')) return;
-      const rect = htmlEl.getBoundingClientRect();
-      if (rect.width < 20 || rect.height < 12) return;
-      const style = window.getComputedStyle(htmlEl);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
-      const containsOther = fallbackEditables.some((other) => other !== htmlEl && htmlEl.contains(other));
-      if (containsOther) return;
-      const selector = getSelectorRobust(htmlEl);
-      if (seenSelectors.has(selector)) return;
-      seenSelectors.add(selector);
-      const label = getLabelForElement(htmlEl);
-      fields.push({
-        selector,
-        label: label || `单元格 ${fields.length + 1}`,
-        type: 'text',
-        name: htmlEl.getAttribute('data-field') || htmlEl.getAttribute('name') || undefined,
-        id: htmlEl.id || undefined,
-        placeholder: htmlEl.getAttribute('data-placeholder') || htmlEl.getAttribute('placeholder') || undefined,
-        tagName: htmlEl.tagName.toLowerCase(),
-      });
-    });
-  }
 
   return fields;
 }
