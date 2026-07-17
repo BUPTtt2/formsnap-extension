@@ -903,20 +903,19 @@ export default function Popup() {
         }))
       );
 
-      // Inject content script if needed
+      // Inject content script first (ensure agentScanner is loaded)
       const tab = await getCurrentTab();
       try {
-        await sendMessageToTab(tab.id!, 'SCAN_FORM');
-      } catch {
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id! },
-            files: ['content.js'],
-          });
-          await new Promise((r) => setTimeout(r, 500));
-        } catch {}
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id! },
+          files: ['content.js'],
+        });
+        await new Promise((r) => setTimeout(r, 800));
+      } catch (injectErr: any) {
+        throw new Error('无法注入脚本到目标页面: ' + injectErr.message);
       }
 
+      // Send fill message
       const result = await sendMessage<{ totalRows: number; filledRows: number; errors: string[] }>(
         'FILL_ROW_BY_ROW',
         { dataRows }
