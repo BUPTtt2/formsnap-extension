@@ -1135,10 +1135,10 @@ function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles:
   }
 
   // Check inputs
-  document.querySelectorAll('input, textarea, [contenteditable="true"], .ant-input, .ant-input-affix-wrapper').forEach((el) => {
+  document.querySelectorAll('input, textarea, [contenteditable="true"], [contenteditable=""], .ant-input, .ant-input-affix-wrapper, .el-input__inner, .el-textarea__inner, [role="textbox"]').forEach((el) => {
     const htmlEl = el as HTMLElement;
     if (htmlEl.getBoundingClientRect().width > 10) {
-      result.inputs.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" type="${(el as HTMLInputElement).type || ''}" placeholder="${(el as HTMLInputElement).placeholder || ''}"> size=${Math.round(htmlEl.getBoundingClientRect().width)}x${Math.round(htmlEl.getBoundingClientRect().height)}`);
+      result.inputs.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" type="${(el as HTMLInputElement).type || ''}" placeholder="${(el as HTMLInputElement).placeholder || ''}" size=${Math.round(htmlEl.getBoundingClientRect().width)}x${Math.round(htmlEl.getBoundingClientRect().height)} ce="${(el as HTMLElement).contentEditable || ''}">`);
     }
   });
 
