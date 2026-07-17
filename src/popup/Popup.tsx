@@ -366,7 +366,20 @@ export default function Popup() {
 
           // If still no fields after all attempts
           if (!scanResult.fields?.length) {
-            if (scanResult.newButtons && scanResult.newButtons.length > 0) {
+            // 使用截图/文本解析出的字段作为虚拟表单字段，进入手动映射模式
+            if (parsedFields.length > 0) {
+              const virtualFields: FormField[] = parsedFields.map((f, i) => ({
+                label: f.field,
+                selector: `__virtual_${i}`,
+                type: f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'select' ? 'select' : f.type === 'checkbox' ? 'checkbox' : f.type === 'radio' ? 'radio' : 'text',
+              }));
+              scanResult = { ...scanResult, fields: virtualFields };
+              setPageMode('virtual-manual');
+              setStatus({ type: 'info', text: '未能自动识别表单字段，已用数据源字段创建虚拟列表。数据将复制到剪贴板供粘贴' });
+              // 进入 mapping 步骤，让用户确认字段映射
+              await proceedWithScanResult(fields, scanResult);
+              return;
+            } else if (scanResult.newButtons && scanResult.newButtons.length > 0) {
               setNewButtons(scanResult.newButtons);
               setStatus({ type: 'info', text: `当前页面没有可填写的表单，检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
             } else if (modalButtons && modalButtons.length > 0) {
@@ -711,6 +724,43 @@ export default function Popup() {
       return;
     }
 
+    // Virtual manual mode: copy data to clipboard for manual paste
+    if (pageMode === 'virtual-manual') {
+      setStep('filling');
+      // 将确认的映射数据格式化为易粘贴的格式
+      const lines = confirmedMappings.map((m) => `${m.targetField.label}：${m.sourceField.value}`);
+      const textContent = lines.join('\n');
+
+      // 如果有多行数据，也生成 TSV 格式
+      let multiLineText = '';
+      if (parsedRows.length > 1) {
+        const headerLine = confirmedMappings.map((m) => m.targetField.label).join('\t');
+        const dataLines = parsedRows.map((row) =>
+          confirmedMappings.map((m) => row.find((f) => f.field === m.sourceField.field)?.value || m.sourceField.value).join('\t')
+        );
+        multiLineText = headerLine + '\n' + dataLines.join('\n');
+      }
+
+      const clipboardText = parsedRows.length > 1 ? multiLineText : textContent;
+
+      try {
+        await navigator.clipboard.writeText(clipboardText);
+        setCopiedToClipboard(true);
+      } catch {
+        setCopiedToClipboard(false);
+      }
+
+      setFillResult({ total: confirmedMappings.length, success: confirmedMappings.length, failed: 0 });
+      setCanUndo(false);
+      setStep('done');
+      const rowHint = parsedRows.length > 1 ? `（共 ${parsedRows.length} 行，含表头）` : '';
+      setStatus({ type: 'success', text: `已将 ${confirmedMappings.length} 个字段数据复制到剪贴板${rowHint}，请手动粘贴到目标位置` });
+      try {
+        await sendMessage('SAVE_MAPPING_HISTORY', { urlPattern: 'virtual-manual', mappings: confirmedMappings });
+      } catch {}
+      return;
+    }
+
     // Table Modal fill mode (for Coze/Dify/小建工 style editors)
     if (pageMode === 'table-modal' && tableModalData) {
       setStep('filling');
@@ -847,7 +897,7 @@ export default function Popup() {
     setStatus(null); setLoading(false); setFileName(null); setFileData(null);
     setNewButtons(null); setCanUndo(false); setCanvasInfo(null); setCanvasColumns('');
     setCopiedToClipboard(false); setScanningColumns(false);
-    setAgentProgress(null);
+    setAgentProgress(null); setPageMode('standard'); setTableModalData(null); setModalButtons(null);
     clearPopupState().catch(() => {});
   };
 
@@ -1009,6 +1059,19 @@ export default function Popup() {
             <span className="mapping-title">字段映射</span>
             <span className="mapping-count">{mappings.filter((m) => m.userConfirmed && m.targetField.selector).length}/{mappings.filter((m) => m.targetField.selector).length} 已确认</span>
           </div>
+
+          {/* Canvas spreadsheet: manual column input */}
+          {pageMode === 'virtual-manual' && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8, fontSize: 12 }}>
+              <div style={{ marginBottom: 6, fontWeight: 600, color: '#7c3aed' }}>📋 虚拟字段模式</div>
+              <div style={{ marginBottom: 6, color: 'var(--muted)' }}>
+                未能自动识别页面表单字段。已根据数据源创建字段列表，点击「填写」后数据将复制到剪贴板。
+              </div>
+              <div style={{ padding: '6px 10px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 6, fontSize: 11, color: '#2563eb' }}>
+                请确认映射关系后点击填写，然后在目标页面 Ctrl+V 粘贴数据。
+              </div>
+            </div>
+          )}
 
           {/* Canvas spreadsheet: manual column input */}
           {canvasInfo?.detected && (
