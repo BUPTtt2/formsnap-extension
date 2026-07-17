@@ -83,7 +83,8 @@ export type MessageType =
   | 'SCAN_TABLE_MODAL'
   | 'FILL_TABLE_MODAL'
   | 'ADD_TABLE_ROW'
-  | 'DETECT_PAGE_MODE';
+  | 'DETECT_PAGE_MODE'
+  | 'FILL_TABLE_MULTI_ROW';
 
 export interface ModalInfo {
   text: string;

@@ -134,6 +134,25 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'FILL_TABLE_MULTI_ROW': {
+        // 转发给 content script 执行多行表格填写
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ totalRows: 0, filledRows: 0, errors: ['未找到活动标签页'] });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_FILL_TABLE_MULTI_ROW', payload: message.payload }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ totalRows: 0, filledRows: 0, errors: [chrome.runtime.lastError.message] });
+            } else {
+              sendResponse(response || { totalRows: 0, filledRows: 0, errors: ['无响应'] });
+            }
+          });
+        });
+        return true;
+      }
+
       default:
         return false;
     }

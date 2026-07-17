@@ -44,6 +44,7 @@ export default function Popup() {
   const [scanDepth, setScanDepth] = useState<'standard' | 'deep'>('standard');
   const [pageMode, setPageMode] = useState<string>('standard');
   const [tableModalData, setTableModalData] = useState<{ headers: string[]; rows: any[]; modalSelector: string } | null>(null);
+  const [agentProgress, setAgentProgress] = useState<{ current: number; total: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const excelFileRef = useRef<HTMLInputElement>(null);
@@ -704,26 +705,55 @@ export default function Popup() {
 
     // Table Modal fill mode (for Coze/Dify/小建工 style editors)
     if (pageMode === 'table-modal' && tableModalData) {
-      setStatus({ type: 'loading', text: '正在填写表格弹窗（Agent 模式）...' });
       setStep('filling');
       try {
-        // Build fill mappings for table modal: sourceField → headerName
-        const tableMappings = confirmedMappings.map((m) => ({
-          sourceField: m.sourceField.field,
-          value: m.sourceField.value,
-          targetHeader: m.targetField.label, // Use header name as target
-        }));
+        // 判断是否有多行数据
+        const multiRowData = parsedRows.length > 1 ? parsedRows : null;
 
-        const result = await sendMessage<{ total: number; success: number; failed: number; error?: string }>(
-          'FILL_TABLE_MODAL',
-          { mappings: tableMappings, tableInfo: tableModalData }
-        );
+        if (multiRowData) {
+          // 多行填写流程
+          const dataRows = multiRowData.map((row) =>
+            confirmedMappings.map((m) => ({
+              fieldName: m.sourceField.field,
+              value: row.find((f) => f.field === m.sourceField.field)?.value || m.sourceField.value,
+            }))
+          );
 
-        if (result.error) throw new Error(result.error);
-        setFillResult({ total: result.total || confirmedMappings.length, success: result.success || 0, failed: result.failed || 0 });
-        setCanUndo(false); // Table modal fill uses React native setter, undo not supported
-        setStep('done');
-        setStatus({ type: 'success', text: `表格填写完成：${result.success || 0}/${confirmedMappings.length} 个字段成功` });
+          setStatus({ type: 'loading', text: `正在填写第 1/${dataRows.length} 行（Agent 模式）...` });
+          setAgentProgress({ current: 1, total: dataRows.length });
+
+          const result = await sendMessage<{ totalRows: number; filledRows: number; errors: string[] }>(
+            'FILL_TABLE_MULTI_ROW',
+            { dataRows, tableInfo: tableModalData }
+          );
+
+          setAgentProgress(null);
+          setFillResult({ total: dataRows.length, success: result.filledRows, failed: dataRows.length - result.filledRows });
+          setCanUndo(false);
+          setStep('done');
+          const errorHint = result.errors.length > 0 ? `（${result.errors.length} 个警告）` : '';
+          setStatus({ type: 'success', text: `Agent 模式: 自动填写了 ${result.filledRows}/${dataRows.length} 行数据${errorHint}` });
+        } else {
+          // 单行填写：走现有的 fillTableModal
+          setStatus({ type: 'loading', text: '正在填写表格弹窗（Agent 模式）...' });
+
+          const tableMappings = confirmedMappings.map((m) => ({
+            sourceField: m.sourceField.field,
+            value: m.sourceField.value,
+            targetHeader: m.targetField.label,
+          }));
+
+          const result = await sendMessage<{ total: number; success: number; failed: number; error?: string }>(
+            'FILL_TABLE_MODAL',
+            { mappings: tableMappings, tableInfo: tableModalData }
+          );
+
+          if (result.error) throw new Error(result.error);
+          setFillResult({ total: result.total || confirmedMappings.length, success: result.success || 0, failed: result.failed || 0 });
+          setCanUndo(false);
+          setStep('done');
+          setStatus({ type: 'success', text: `表格填写完成：${result.success || 0}/${confirmedMappings.length} 个字段成功` });
+        }
 
         // Save history
         try {
@@ -732,6 +762,7 @@ export default function Popup() {
           await sendMessage('SAVE_MAPPING_HISTORY', { urlPattern: url, mappings: confirmedMappings });
         } catch {}
       } catch (err: any) {
+        setAgentProgress(null);
         setStatus({ type: 'error', text: '表格填写失败: ' + (err.message || '请确认弹窗已打开') });
         setStep('mapping');
       }
@@ -771,7 +802,7 @@ export default function Popup() {
       setStatus({ type: 'error', text: err.message || '填写失败' });
       setStep('mapping');
     }
-  }, [mappings, canvasInfo]);
+  }, [mappings, canvasInfo, parsedRows, pageMode, tableModalData]);
 
   const handleUndo = useCallback(async () => {
     try {
@@ -808,6 +839,7 @@ export default function Popup() {
     setStatus(null); setLoading(false); setFileName(null); setFileData(null);
     setNewButtons(null); setCanUndo(false); setCanvasInfo(null); setCanvasColumns('');
     setCopiedToClipboard(false); setScanningColumns(false);
+    setAgentProgress(null);
     clearPopupState().catch(() => {});
   };
 
@@ -1135,6 +1167,22 @@ export default function Popup() {
       {step === 'done' && (
         <>
           {status && <div className={`status-bar ${status.type}`}>{status.text}</div>}
+
+          {/* Agent 多行填写信息条 */}
+          {pageMode === 'table-modal' && fillResult && fillResult.total > 1 && (
+            <div style={{
+              margin: '8px 0',
+              padding: '8px 12px',
+              background: 'rgba(34,197,94,0.06)',
+              border: '1px solid rgba(34,197,94,0.2)',
+              borderRadius: 8,
+              fontSize: 12,
+              color: '#16a34a',
+              fontWeight: 500,
+            }}>
+              Agent 模式: 自动填写了 {fillResult.success} 行数据
+            </div>
+          )}
 
           {/* Canvas mode: show field→value mapping table and paste instructions */}
           {canvasInfo?.detected && (

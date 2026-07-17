@@ -389,6 +389,8 @@ function scanModalForTable(modal: HTMLElement): Omit<TableModalInfo, 'modalSelec
 
       if (inputEl) {
         const inputType = detectCellInputType(inputEl);
+        // 跳过 toggle 类型元素（通常是功能开关，不存储用户数据）
+        if (inputType === 'toggle') return;
         cells.push({
           colIndex: colIdx,
           headerName: headers[colIdx] || `列${colIdx + 1}`,
@@ -429,7 +431,7 @@ export async function fillTableModal(
 
   for (const mapping of mappings) {
     try {
-      // 遍历所有行，找到目标列头对应的单元格
+      // 遍历所有行，找到目标列头对应的单元格，填写所有匹配行
       let filled = false;
       for (const row of tableInfo.rows) {
         const targetCell = row.cells.find(
@@ -446,7 +448,7 @@ export async function fillTableModal(
 
         fillSingleCell(el, mapping.sourceValue, targetCell.type);
         filled = true;
-        break; // 每个映射只填第一个匹配行
+        // 不 break，继续填写后续匹配行
       }
 
       if (!filled) {
@@ -623,6 +625,97 @@ export async function waitForAndScan(timeout: number = 500): Promise<TableModalI
   return scanTableModal();
 }
 
+// ========================== 3.5 Agent 多行自动填写 ==========================
+
+/**
+ * Agent 多行自动填写：自动点击"新增"按钮，逐行填入数据。
+ * @param dataRows 每行数据的数组，每个元素是 { fieldName, value }[]
+ * @param tableInfo 表格信息
+ * @param onProgress 进度回调（可选）
+ */
+export async function fillTableModalMultiRow(
+  dataRows: { fieldName: string; value: string }[][],
+  tableInfo: TableModalInfo
+): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
+  const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
+
+  if (!tableInfo.detected) {
+    result.errors.push('未检测到表格弹窗');
+    return result;
+  }
+
+  try {
+    // 1. 检查当前已有的行数
+    let currentInfo = scanTableModal();
+    const existingRowCount = currentInfo.rows.length;
+
+    // 2. 如果已有行数不足，需要新增行
+    const rowsToAdd = dataRows.length - existingRowCount;
+    if (rowsToAdd > 0) {
+      for (let i = 0; i < rowsToAdd; i++) {
+        try {
+          const added = await addTableRow(currentInfo);
+          if (!added) {
+            result.errors.push(`第 ${i + 1} 次点击"新增"按钮失败`);
+            break;
+          }
+          // 等待新行渲染
+          await delay(800);
+          // 重新扫描表格获取新行的 DOM 引用
+          currentInfo = scanTableModal();
+        } catch (err) {
+          result.errors.push(`新增第 ${i + 1} 行时出错: ${err instanceof Error ? err.message : String(err)}`);
+          break;
+        }
+      }
+    }
+
+    // 3. 逐行填写
+    for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
+      const rowData = dataRows[rowIdx];
+      const targetRow = currentInfo.rows[rowIdx];
+
+      if (!targetRow) {
+        result.errors.push(`第 ${rowIdx + 1} 行在表格中不存在`);
+        continue;
+      }
+
+      let rowFilled = 0;
+      for (const field of rowData) {
+        try {
+          // 在当前行中找到对应列头的单元格
+          const targetCell = targetRow.cells.find(
+            (c) => c.headerName === field.fieldName
+          );
+          if (!targetCell) continue;
+
+          // 重新从 DOM 获取元素引用
+          const el = document.querySelector(targetCell.selector) as HTMLElement | null;
+          if (!el) {
+            result.errors.push(`第 ${rowIdx + 1} 行 "${field.fieldName}" 元素未找到`);
+            continue;
+          }
+
+          fillSingleCell(el, field.value, targetCell.type);
+          rowFilled++;
+          // 每填一个字段间隔 150ms
+          await delay(150);
+        } catch (err) {
+          result.errors.push(`第 ${rowIdx + 1} 行 "${field.fieldName}" 填写失败: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      if (rowFilled > 0) {
+        result.filledRows++;
+      }
+    }
+  } catch (err) {
+    result.errors.push(`多行填写过程出错: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return result;
+}
+
 // ========================== 5. 页面模式检测 ==========================
 
 /**
@@ -732,6 +825,7 @@ export const AGENT_MESSAGE_TYPES = {
   EXEC_FILL_TABLE_MODAL: 'EXEC_FILL_TABLE_MODAL',
   EXEC_ADD_TABLE_ROW: 'EXEC_ADD_TABLE_ROW',
   EXEC_DETECT_PAGE_MODE: 'EXEC_DETECT_PAGE_MODE',
+  EXEC_FILL_TABLE_MULTI_ROW: 'EXEC_FILL_TABLE_MULTI_ROW',
 } as const;
 
 chrome.runtime.onMessage.addListener(
@@ -766,6 +860,15 @@ chrome.runtime.onMessage.addListener(
           const result = detectPageMode();
           sendResponse(result);
           return false;
+        }
+
+        case AGENT_MESSAGE_TYPES.EXEC_FILL_TABLE_MULTI_ROW: {
+          const { dataRows, tableInfo } = message.payload as {
+            dataRows: { fieldName: string; value: string }[][];
+            tableInfo: TableModalInfo;
+          };
+          fillTableModalMultiRow(dataRows, tableInfo).then(sendResponse);
+          return true; // 异步响应
         }
 
         default:
