@@ -202,31 +202,45 @@ chrome.runtime.onMessage.addListener(
       }
 
       case 'AI_MATCH_FIELDS': {
-        // AI-powered matching: capture page screenshot and send to AI with parsed fields
+        // AI-powered matching: use user-provided target screenshots
         if (!message.payload || !message.payload.parsedFields || !message.payload.formFields) {
           sendResponse({ error: '缺少字段数据', mappings: [] });
           return false;
         }
-        const { parsedFields, formFields } = message.payload;
+        const { parsedFields, formFields, targetImages } = message.payload;
         getSettings().then((settings) => {
           if (!settings.apiKey) {
             sendResponse({ error: '请先设置 API Key', mappings: [] });
             return;
           }
-          // Capture the current page screenshot
-          chrome.tabs.captureVisibleTab(null as any, { format: 'png', quality: 80 }, async (dataUrl) => {
-            if (chrome.runtime.lastError || !dataUrl) {
-              sendResponse({ error: '截图失败: ' + (chrome.runtime.lastError?.message || '未知错误'), mappings: [] });
-              return;
-            }
-            try {
-              const { matchFieldsWithAI } = await import('../core/aiEngine');
-              const mappings = await matchFieldsWithAI(settings, parsedFields, formFields, dataUrl);
-              sendResponse({ mappings });
-            } catch (err: any) {
-              sendResponse({ error: err.message, mappings: [] });
-            }
-          });
+          // Use user-provided target screenshots if available, otherwise captureVisibleTab
+          if (targetImages && targetImages.length > 0) {
+            (async () => {
+              try {
+                const { matchFieldsWithAI } = await import('../core/aiEngine');
+                // Use first target image for matching
+                const mappings = await matchFieldsWithAI(settings, parsedFields, formFields, targetImages[0]);
+                sendResponse({ mappings });
+              } catch (err: any) {
+                sendResponse({ error: err.message, mappings: [] });
+              }
+            })();
+          } else {
+            // Fallback: capture current page screenshot
+            chrome.tabs.captureVisibleTab(null as any, { format: 'png', quality: 80 }, async (dataUrl) => {
+              if (chrome.runtime.lastError || !dataUrl) {
+                sendResponse({ error: '截图失败，请手动上传目标页面截图', mappings: [] });
+                return;
+              }
+              try {
+                const { matchFieldsWithAI } = await import('../core/aiEngine');
+                const mappings = await matchFieldsWithAI(settings, parsedFields, formFields, dataUrl);
+                sendResponse({ mappings });
+              } catch (err: any) {
+                sendResponse({ error: err.message, mappings: [] });
+              }
+            });
+          }
         });
         return true;
       }

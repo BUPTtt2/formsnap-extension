@@ -17,6 +17,8 @@ export default function Popup() {
   const [inputMode, setInputMode] = useState<InputMode>('image');
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [imagesBase64, setImagesBase64] = useState<string[]>([]);
+  const [targetImages, setTargetImages] = useState<string[]>([]);
+  const [targetPreviews, setTargetPreviews] = useState<string[]>([]);
   const [textContent, setTextContent] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileData, setFileData] = useState<File | null>(null);
@@ -48,6 +50,7 @@ export default function Popup() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const excelFileRef = useRef<HTMLInputElement>(null);
+  const targetFileInputRef = useRef<HTMLInputElement>(null);
 
   // Load settings
   useEffect(() => {
@@ -195,6 +198,17 @@ export default function Popup() {
   }, [inputMode, handleImageFile]);
 
   // Step 1: Parse data only — no page scanning
+  const handleTargetImage = useCallback(async (file: File) => {
+    if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) return;
+    if (targetImages.length >= 3) return; // max 3 target screenshots
+    const preview = URL.createObjectURL(file);
+    setTargetPreviews((prev) => [...prev, preview]);
+    try {
+      const b64 = await prepareImageForAI(file);
+      setTargetImages((prev) => [...prev, b64]);
+    } catch {}
+  }, [targetImages.length]);
+
   const handleParseData = useCallback(async () => {
     setLoading(true);
     setNewButtons(null);
@@ -865,10 +879,11 @@ export default function Popup() {
     setNewButtons(null); setCanUndo(false); setCanvasInfo(null); setCanvasColumns('');
     setCopiedToClipboard(false); setScanningColumns(false);
     setAgentProgress(null); setPageMode('standard'); setTableModalData(null); setModalButtons(null);
+    setTargetImages([]); setTargetPreviews([]);
     clearPopupState().catch(() => {});
   };
 
-  // AI-powered matching: send page screenshot + parsed data to AI for intelligent mapping
+  // AI-powered matching: use user-provided target screenshots + page scan
   const handleAiMatch = useCallback(async () => {
     if (!settings?.apiKey) {
       setStatus({ type: 'error', text: '请先在设置中配置 API Key' });
@@ -879,7 +894,7 @@ export default function Popup() {
     try {
       const result = await sendMessage<{ mappings?: { sourceField: string; targetSelector: string; confidence: number }[]; error?: string }>(
         'AI_MATCH_FIELDS',
-        { parsedFields, formFields }
+        { parsedFields, formFields, targetImages, pageUrl: (await getCurrentTab()).url }
       );
       if (result.error) throw new Error(result.error);
       if (result.mappings?.length) {
@@ -903,7 +918,7 @@ export default function Popup() {
       setStatus({ type: 'error', text: 'AI 匹配失败: ' + (err.message || '未知错误') });
     }
     setLoading(false);
-  }, [settings, parsedFields, formFields]);
+  }, [settings, parsedFields, formFields, targetImages]);
 
   const openSettings = () => { chrome.runtime.openOptionsPage(); };
 
@@ -999,15 +1014,46 @@ export default function Popup() {
                 ) : (
                   <>
                     <div className="drop-zone-icon">📎</div>
-                    <div className="drop-zone-text">点击上传 / 拖拽 / Ctrl+V 粘贴截图</div>
-                    <div className="drop-zone-hint">支持 PNG, JPG, WebP（最多 {MAX_IMAGES} 张，每张 {MAX_IMAGE_SIZE_MB}MB）</div>
+                    <div className="drop-zone-text">拖入/粘贴 待填数据截图</div>
+                    <div className="drop-zone-hint">包含字段名和值的数据截图（最多 {MAX_IMAGES} 张）</div>
                   </>
                 )}
               </div>
               <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleFileChange} />
               {imagePreviews.length > 0 && (
-                <button className="btn btn-outline" style={{ width: '100%', marginBottom: 8 }} onClick={() => { setImagePreviews([]); setImagesBase64([]); }}>清除所有截图</button>
+                <button className="btn btn-outline" style={{ width: '100%', marginBottom: 8 }} onClick={() => { setImagePreviews([]); setImagesBase64([]); }}>清除数据截图</button>
               )}
+
+              {/* Target page screenshot upload (optional) */}
+              <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(139,92,246,0.04)', border: '1px dashed rgba(139,92,246,0.3)', borderRadius: 8, fontSize: 11 }}>
+                <div style={{ fontWeight: 600, color: '#7c3aed', marginBottom: 4 }}>目标页面截图（可选，帮助 AI 更好地匹配字段）</div>
+                <div className="drop-zone" style={{ minHeight: 50, padding: '8px', background: 'rgba(139,92,246,0.02)', borderColor: 'rgba(139,92,246,0.2)' }}
+                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('dragover'); }}
+                  onDragLeave={(e) => e.currentTarget.classList.remove('dragover')}
+                  onDrop={(e) => {
+                    e.preventDefault(); e.currentTarget.classList.remove('dragover');
+                    const files = e.dataTransfer.files;
+                    if (files) Array.from(files).filter((f) => f.type.startsWith('image/')).forEach((f) => handleTargetImage(f));
+                  }}
+                  onClick={() => targetFileInputRef.current?.click()}>
+                  {targetPreviews.length > 0 ? (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {targetPreviews.map((src, i) => (
+                        <img key={i} src={src} className="preview-image" alt={`目标${i+1}`} style={{ maxHeight: 60, maxWidth: '48%' }} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: '#8b5cf6' }}>拖入/粘贴待填页面的截图</div>
+                  )}
+                </div>
+                <input ref={targetFileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => {
+                  const files = e.target.files;
+                  if (files) Array.from(files).forEach((f) => handleTargetImage(f));
+                }} />
+                {targetPreviews.length > 0 && (
+                  <button className="btn btn-outline" style={{ width: '100%', marginTop: 4, fontSize: 11, borderColor: '#8b5cf6', color: '#7c3aed' }} onClick={() => { setTargetPreviews([]); setTargetImages([]); }}>清除目标截图</button>
+                )}
+              </div>
             </div>
           ) : inputMode === 'text' ? (
             <div className="input-section">
