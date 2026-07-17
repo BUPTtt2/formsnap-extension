@@ -201,6 +201,36 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'AI_MATCH_FIELDS': {
+        // AI-powered matching: capture page screenshot and send to AI with parsed fields
+        if (!message.payload || !message.payload.parsedFields || !message.payload.formFields) {
+          sendResponse({ error: '缺少字段数据', mappings: [] });
+          return false;
+        }
+        const { parsedFields, formFields } = message.payload;
+        getSettings().then((settings) => {
+          if (!settings.apiKey) {
+            sendResponse({ error: '请先设置 API Key', mappings: [] });
+            return;
+          }
+          // Capture the current page screenshot
+          chrome.tabs.captureVisibleTab(null as any, { format: 'png', quality: 80 }, async (dataUrl) => {
+            if (chrome.runtime.lastError || !dataUrl) {
+              sendResponse({ error: '截图失败: ' + (chrome.runtime.lastError?.message || '未知错误'), mappings: [] });
+              return;
+            }
+            try {
+              const { matchFieldsWithAI } = await import('../core/aiEngine');
+              const mappings = await matchFieldsWithAI(settings, parsedFields, formFields, dataUrl);
+              sendResponse({ mappings });
+            } catch (err: any) {
+              sendResponse({ error: err.message, mappings: [] });
+            }
+          });
+        });
+        return true;
+      }
+
       default:
         return false;
     }

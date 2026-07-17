@@ -269,3 +269,40 @@ export async function semanticMatch(
   const raw = await callOpenAICompatible(settings.apiEndpoint, settings.apiKey, settings.apiModel, [], prompt);
   return parseJSONResponse(raw);
 }
+
+/**
+ * AI-powered visual matching: send page screenshot + parsed data fields to AI.
+ * AI looks at the screenshot to understand the page layout and returns
+ * which data field should map to which DOM element's selector.
+ */
+export async function matchFieldsWithAI(
+  settings: ExtensionSettings,
+  parsedFields: { field: string; value: string; type: string }[],
+  formFields: { label: string; selector: string; type: string; placeholder?: string }[],
+  pageScreenshot: string
+): Promise<Array<{ sourceField: string; targetSelector: string; confidence: number }>> {
+  const fieldList = parsedFields.map((f) => `- ${f.field} (值: ${f.value}, 类型: ${f.type})`).join('\n');
+  const targetList = formFields.map((f, i) => `  ${i + 1}. 标签: "${f.label || '(空)'}", placeholder: "${f.placeholder || ''}", 类型: ${f.type}, selector: ${f.selector}`).join('\n');
+
+  const prompt = `你是一个智能表单填写助手。请查看当前页面的截图，理解页面上的表单布局。
+
+我有以下数据需要填入页面：
+${fieldList}
+
+页面上检测到以下可填写位置：
+${targetList}
+
+请根据截图中的视觉布局，判断每个数据字段应该填入页面上的哪个位置（selector）。
+只匹配你能确定对应关系的字段，不确定的不要强行匹配。
+
+返回严格的 JSON 数组格式：
+[
+  {"sourceField": "数据字段名", "targetSelector": "目标元素的selector", "confidence": 0.95}
+]
+
+confidence 是匹配置信度 0-1。完全确定对应关系为 1.0，通过上下文推断为 0.8-0.95，猜测为 0.5-0.8。
+只返回 JSON 数组，不要其他文字。`;
+
+  const raw = await callOpenAICompatible(settings.apiEndpoint, settings.apiKey, settings.apiModel, [pageScreenshot], prompt);
+  return parseJSONResponse(raw);
+}

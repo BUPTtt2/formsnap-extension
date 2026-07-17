@@ -5,7 +5,7 @@ import { prepareImageForAI, clipboardToBlob } from '../utils/imageUtils';
 import { parseFile } from '../utils/fileParser';
 import { savePopupState, getPopupState, clearPopupState } from '../utils/storage';
 
-type AppStep = 'input' | 'mapping' | 'filling' | 'done';
+type AppStep = 'input' | 'data-review' | 'mapping' | 'filling' | 'done';
 type InputMode = 'image' | 'text' | 'file';
 
 const MAX_IMAGES = 10;
@@ -194,7 +194,8 @@ export default function Popup() {
     }
   }, [inputMode, handleImageFile]);
 
-  const handleProcess = useCallback(async () => {
+  // Step 1: Parse data only — no page scanning
+  const handleParseData = useCallback(async () => {
     setLoading(true);
     setNewButtons(null);
     setStatus({ type: 'loading', text: '正在解析数据...' });
@@ -217,7 +218,6 @@ export default function Popup() {
         if (!fields.length) throw new Error('文件中未识别到有效数据');
       } else if (!fields.length && (imagesBase64.length > 0 || (inputMode === 'text' && textContent.trim()))) {
         if (imagesBase64.length > 1) {
-          // 多张截图：逐张独立解析，每张一行数据
           const multiRows: ParsedField[][] = [];
           for (let i = 0; i < imagesBase64.length; i++) {
             setStatus({ type: 'loading', text: `正在解析第 ${i + 1}/${imagesBase64.length} 张截图...` });
@@ -244,11 +244,23 @@ export default function Popup() {
       }
 
       setParsedFields(fields);
-      setModalButtons(null);
-      setScanDepth('standard');
-      setStatus({ type: 'loading', text: `已识别 ${fields.length} 个字段，正在扫描页面表单...` });
+      setStatus({ type: 'success', text: `已识别 ${fields.length} 个字段，请确认数据后点击"扫描页面并填写"` });
+      setStep('data-review');
+      setLoading(false);
+    } catch (err: any) {
+      setStatus({ type: 'error', text: err.message || '处理失败' });
+      setLoading(false);
+    }
+  }, [imagesBase64, textContent, inputMode, fileData]);
 
-      // Scan current page (standard scan first)
+  // Step 2: Scan page + match + fill (triggered from data-review or mapping)
+  const handleScanAndFill = useCallback(async () => {
+    setLoading(true);
+    setModalButtons(null);
+    setScanDepth('standard');
+    setStatus({ type: 'loading', text: '正在扫描页面表单...' });
+
+    try {
       const tab = await getCurrentTab();
       let scanResult: { fields: FormField[]; newButtons?: NewButtonInfo[]; canvasInfo?: CanvasSpreadsheetInfo; url: string; title: string };
       try {
@@ -256,40 +268,34 @@ export default function Popup() {
           tab.id!, 'SCAN_FORM'
         );
       } catch (scanErr: any) {
-        // Content script not injected, try dynamic injection
         try {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id! },
             files: ['content.js'],
           });
-          // Wait a moment for the script to initialize
           await new Promise((r) => setTimeout(r, 500));
           scanResult = await sendMessageToTab<{ fields: FormField[]; newButtons?: NewButtonInfo[]; canvasInfo?: CanvasSpreadsheetInfo; url: string; title: string }>(
             tab.id!, 'SCAN_FORM'
           );
         } catch (injectErr: any) {
-          setStatus({ type: 'error', text: '无法连接到当前页面。请刷新页面后重试。如果问题持续，请尝试：在扩展管理页点击"刷新"按钮，然后刷新当前网页' });
+          setStatus({ type: 'error', text: '无法连接到当前页面。请刷新页面后重试。' });
           setLoading(false);
           return;
         }
       }
 
-      // Save canvas info
       if (scanResult.canvasInfo) {
         setCanvasInfo(scanResult.canvasInfo);
       }
 
       if (!scanResult?.fields?.length) {
-        // Check if it's a Canvas spreadsheet
         if (scanResult.canvasInfo?.detected) {
-          setStatus({ type: 'info', text: '检测到 Canvas 表格（如 SpreadJS），需要手动指定列名' });
-          setParsedFields(fields);
+          setStatus({ type: 'info', text: '检测到 Canvas 表格，需要手动指定列名' });
           setStep('mapping');
           setLoading(false);
           return;
         }
-        // No fields found - try deep scan with Shadow DOM support
-        setStatus({ type: 'loading', text: '标准扫描未找到表单，尝试深度扫描（含 Shadow DOM）...' });
+        setStatus({ type: 'loading', text: '标准扫描未找到表单，尝试深度扫描...' });
         setScanDepth('deep');
         try {
           const deepResult = await sendMessage<{ fields?: FormField[]; modals?: ModalInfo[]; error?: string }>('SCAN_FORM_DEEP');
@@ -299,29 +305,21 @@ export default function Popup() {
           if (deepResult.modals?.length) {
             setModalButtons(deepResult.modals);
           }
-        } catch (deepErr) {
-          // Deep scan failed, continue with standard result
-        }
+        } catch (deepErr) {}
 
-        // Still no fields?
         if (!scanResult.fields?.length) {
-          // Try table modal scan (for Coze/Dify/小建工 style variable editors)
           setStatus({ type: 'loading', text: '尝试检测表格型弹窗...' });
           try {
             const tableModalResult = await sendMessage<{ detected: boolean; rows?: any[]; headers?: string[]; modalSelector?: string; error?: string }>(
               'SCAN_TABLE_MODAL'
             );
             if (tableModalResult?.detected && tableModalResult.headers?.length) {
-              // Convert table modal to FormField format using column headers
               const tableFields: FormField[] = [];
               const headers = tableModalResult.headers;
               const rows = tableModalResult.rows || [];
               const isEmptyTable = rows.length === 0;
-              
-              // Use column headers as field labels, with the first data row's input selectors
               for (let colIdx = 0; colIdx < headers.length; colIdx++) {
                 const headerName = headers[colIdx];
-                // Find the first row's input for this column
                 let selector = '';
                 let cellType = 'text';
                 for (const row of rows) {
@@ -334,58 +332,27 @@ export default function Popup() {
                 }
                 if (selector) {
                   const fieldType: FieldType = cellType === 'toggle' ? 'checkbox' : cellType === 'select' ? 'select' : cellType === 'textarea' ? 'textarea' : 'text';
-                  tableFields.push({
-                    label: headerName,
-                    selector,
-                    type: fieldType,
-                  });
+                  tableFields.push({ label: headerName, selector, type: fieldType });
                 } else if (isEmptyTable && headerName) {
-                  // 表格为空时仍创建字段（用列头名称），selector 为空表示需要先新增行
-                  tableFields.push({
-                    label: headerName,
-                    selector: '__needs_new_row__',
-                    type: 'text',
-                  });
+                  tableFields.push({ label: headerName, selector: '__needs_new_row__', type: 'text' });
                 }
               }
-
               if (tableFields.length > 0) {
                 scanResult = { ...scanResult, fields: tableFields };
-                // Store table modal info for later use in filling
                 setPageMode('table-modal');
-                setTableModalData({
-                  headers: tableModalResult.headers,
-                  rows: tableModalResult.rows || [],
-                  modalSelector: tableModalResult.modalSelector || '',
-                });
+                setTableModalData({ headers: tableModalResult.headers, rows: tableModalResult.rows || [], modalSelector: tableModalResult.modalSelector || '' });
               }
             }
-          } catch (tableErr) {
-            // Table modal scan failed, continue
-          }
+          } catch (tableErr) {}
 
-          // If still no fields after all attempts
           if (!scanResult.fields?.length) {
-            // 使用截图/文本解析出的字段作为虚拟表单字段，进入手动映射模式
-            if (parsedFields.length > 0) {
-              const virtualFields: FormField[] = parsedFields.map((f, i) => ({
-                label: f.field,
-                selector: `__virtual_${i}`,
-                type: f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'select' ? 'select' : f.type === 'checkbox' ? 'checkbox' : f.type === 'radio' ? 'radio' : 'text',
-              }));
-              scanResult = { ...scanResult, fields: virtualFields };
-              setPageMode('virtual-manual');
-              setStatus({ type: 'info', text: '未能自动识别表单字段，已用数据源字段创建虚拟列表。数据将复制到剪贴板供粘贴' });
-              // 进入 mapping 步骤，让用户确认字段映射
-              await proceedWithScanResult(fields, scanResult);
-              return;
-            } else if (scanResult.newButtons && scanResult.newButtons.length > 0) {
+            if (scanResult.newButtons && scanResult.newButtons.length > 0) {
               setNewButtons(scanResult.newButtons);
-              setStatus({ type: 'info', text: `当前页面没有可填写的表单，检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
+              setStatus({ type: 'info', text: `检测到 ${scanResult.newButtons.length} 个"新建"按钮` });
             } else if (modalButtons && modalButtons.length > 0) {
-              setStatus({ type: 'info', text: `未找到表单，但检测到 ${modalButtons.length} 个弹窗/设置按钮，请先点击打开` });
+              setStatus({ type: 'info', text: `检测到 ${modalButtons.length} 个弹窗按钮，请先点击打开` });
             } else {
-              setStatus({ type: 'error', text: '当前页面未检测到表单字段。可能需要先点击弹窗或展开编辑区域' });
+              setStatus({ type: 'error', text: '当前页面未检测到表单字段' });
             }
             setLoading(false);
             return;
@@ -393,12 +360,12 @@ export default function Popup() {
         }
       }
 
-      await proceedWithScanResult(fields, scanResult);
+      await proceedWithScanResult(parsedFields, scanResult);
     } catch (err: any) {
-      setStatus({ type: 'error', text: err.message || '处理失败' });
+      setStatus({ type: 'error', text: err.message || '扫描失败' });
       setLoading(false);
     }
-  }, [imagesBase64, textContent, inputMode, fileData]);
+  }, [parsedFields]);
 
   const proceedWithScanResult = async (
     sourceFields: ParsedField[],
@@ -901,6 +868,43 @@ export default function Popup() {
     clearPopupState().catch(() => {});
   };
 
+  // AI-powered matching: send page screenshot + parsed data to AI for intelligent mapping
+  const handleAiMatch = useCallback(async () => {
+    if (!settings?.apiKey) {
+      setStatus({ type: 'error', text: '请先在设置中配置 API Key' });
+      return;
+    }
+    setLoading(true);
+    setStatus({ type: 'loading', text: 'AI 正在分析页面与数据的匹配关系...' });
+    try {
+      const result = await sendMessage<{ mappings?: { sourceField: string; targetSelector: string; confidence: number }[]; error?: string }>(
+        'AI_MATCH_FIELDS',
+        { parsedFields, formFields }
+      );
+      if (result.error) throw new Error(result.error);
+      if (result.mappings?.length) {
+        setMappings((prev) =>
+          prev.map((m) => {
+            const aiMatch = result.mappings!.find((am) => am.sourceField === m.sourceField.field);
+            if (aiMatch) {
+              const target = formFields.find((f) => f.selector === aiMatch.targetSelector);
+              if (target) {
+                return { ...m, targetField: target, confidence: aiMatch.confidence, status: 'auto' as const, userConfirmed: true };
+              }
+            }
+            return m;
+          })
+        );
+        setStatus({ type: 'success', text: `AI 智能匹配完成，已匹配 ${result.mappings.length} 个字段` });
+      } else {
+        setStatus({ type: 'info', text: 'AI 未能自动匹配，请手动选择' });
+      }
+    } catch (err: any) {
+      setStatus({ type: 'error', text: 'AI 匹配失败: ' + (err.message || '未知错误') });
+    }
+    setLoading(false);
+  }, [settings, parsedFields, formFields]);
+
   const openSettings = () => { chrome.runtime.openOptionsPage(); };
 
   const canProcess = inputMode === 'image' ? imagesBase64.length > 0 : inputMode === 'text' ? !!textContent.trim() : !!fileName;
@@ -1046,10 +1050,59 @@ export default function Popup() {
             </div>
           )}
 
-          <button className="btn btn-primary" onClick={handleProcess} disabled={!canProcess}>
-            解析并匹配
+          <button className="btn btn-primary" onClick={handleParseData} disabled={!canProcess}>
+            解析数据
           </button>
         </>
+      )}
+
+      {/* Step: Data Review — user confirms parsed data before scanning */}
+      {step === 'data-review' && !loading && (
+        <div className="data-review-panel">
+          <div className="mapping-header">
+            <span className="mapping-title">已识别数据</span>
+            <span className="mapping-count">{parsedFields.length} 个字段</span>
+          </div>
+
+          <div style={{ marginBottom: 12, padding: '8px 10px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: 8, fontSize: 11, color: '#16a34a' }}>
+            数据解析完成。请确认字段无误后，点击下方按钮扫描页面并填写。
+          </div>
+
+          {/* Show parsed fields */}
+          <div style={{ marginBottom: 12, maxHeight: 200, overflowY: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>字段</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>值</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>类型</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parsedFields.map((f, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                    <td style={{ padding: '4px 8px', color: '#374151' }}>{f.field}</td>
+                    <td style={{ padding: '4px 8px', color: '#6b7280', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.value}</td>
+                    <td style={{ padding: '4px 8px', color: '#9ca3af', fontSize: 11 }}>{f.type}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {parsedRows.length > 1 && (
+            <div style={{ marginBottom: 12, padding: '6px 10px', background: 'rgba(59,130,246,0.06)', borderRadius: 6, fontSize: 11, color: '#2563eb' }}>
+              检测到 {parsedRows.length} 行数据，将逐行填写
+            </div>
+          )}
+
+          <div className="action-bar">
+            <button className="btn btn-outline" onClick={handleReset}>返回</button>
+            <button className="btn btn-primary" onClick={handleScanAndFill} disabled={loading}>
+              扫描页面并填写
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Step: Mapping */}
@@ -1081,6 +1134,16 @@ export default function Popup() {
               ))}
             </div>
           </div>
+
+          {/* AI Smart Match button */}
+          <button
+            className="btn btn-outline"
+            onClick={handleAiMatch}
+            disabled={loading}
+            style={{ width: '100%', marginBottom: 12, padding: '8px', fontSize: 12, borderColor: '#8b5cf6', color: '#7c3aed', borderStyle: 'dashed' }}
+          >
+            🤖 AI 智能匹配（截图页面让 AI 理解字段对应关系）
+          </button>
 
           {/* Canvas spreadsheet: manual column input */}
           {pageMode === 'virtual-manual' && (
