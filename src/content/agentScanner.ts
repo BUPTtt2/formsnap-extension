@@ -943,24 +943,70 @@ export async function fillRowByRowAgent(
 
 /**
  * 获取弹窗内所有可见输入元素，按 DOM 顺序排列。
+ * 覆盖多种框架：标准 input/textarea、contenteditable、Ant Design Input、自定义编辑器。
  */
 function getAllRowInputs(): HTMLElement[] {
   const inputs: HTMLElement[] = [];
   const modals = findVisibleModals();
   const scope = modals.length > 0 ? modals[0] : document.body;
 
+  // Strategy 1: Standard inputs
   scope.querySelectorAll(
-    'input[type="text"], input:not([type]), textarea, [contenteditable="true"], [contenteditable=""]'
+    'input[type="text"], input:not([type]), textarea'
+  ).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (isVisible(htmlEl)) inputs.push(htmlEl);
+  });
+
+  // Strategy 2: contenteditable elements (rich text editors, Ant Design Input.TextArea, etc.)
+  scope.querySelectorAll(
+    '[contenteditable="true"], [contenteditable=""]'
   ).forEach((el) => {
     const htmlEl = el as HTMLElement;
     const rect = htmlEl.getBoundingClientRect();
-    if (rect.width > 10 && rect.height > 5) {
-      const style = window.getComputedStyle(htmlEl);
-      if (style.display !== 'none' && style.visibility !== 'hidden') {
+    // Filter: only include reasonably-sized editable elements
+    if (rect.width > 20 && rect.height > 10 && isVisible(htmlEl)) {
+      // Skip if already inside a scanned input/textarea
+      if (!htmlEl.closest('input, textarea')) {
         inputs.push(htmlEl);
       }
     }
   });
+
+  // Strategy 3: Ant Design Input wrapper (.ant-input, .ant-input-affix-wrapper)
+  scope.querySelectorAll(
+    '.ant-input, .ant-input-affix-wrapper, .ant-input-textarea textarea'
+  ).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (isVisible(htmlEl) && !inputs.includes(htmlEl)) {
+      inputs.push(htmlEl);
+    }
+  });
+
+  // Strategy 4: ProseMirror/TipTap editors (often used in modern editors)
+  scope.querySelectorAll(
+    '.ProseMirror, .tiptap, [class*="editor-content"], [class*="Editor-content"]'
+  ).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    const rect = htmlEl.getBoundingClientRect();
+    if (rect.width > 20 && rect.height > 10 && isVisible(htmlEl)) {
+      inputs.push(htmlEl);
+    }
+  });
+
+  // Sort by DOM position
+  inputs.sort((a, b) => {
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  console.log(`[FormSnap] getAllRowInputs found ${inputs.length} inputs`, inputs.map((el) => ({
+    tag: el.tagName,
+    class: el.className?.toString().slice(0, 50),
+    size: `${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}`,
+  })));
 
   return inputs;
 }
@@ -979,6 +1025,9 @@ function getAllToggles(): HTMLElement[] {
     const htmlEl = el as HTMLElement;
     if (isVisible(htmlEl)) toggles.push(htmlEl);
   });
+
+  console.log(`[FormSnap] getAllToggles found ${toggles.length} in scope:`,
+    scope.tagName + (scope.id ? '#' + scope.id : '') + (scope.className ? '.' + scope.className.toString().slice(0, 40) : ''));
 
   return toggles;
 }
