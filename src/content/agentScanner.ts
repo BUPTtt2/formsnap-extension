@@ -121,6 +121,8 @@ function findVisibleModals(): HTMLElement[] {
     '.modal',
     '.ant-modal',
     '.el-dialog',
+    '.el-dialog__wrapper',
+    '.v-modal',
     '[aria-modal="true"]',
     '[class*="Modal"]',
     '[class*="modal"]',
@@ -191,6 +193,42 @@ function findVisibleModals(): HTMLElement[] {
             break; // 只取第一个大的 fixed 元素
           }
         }
+      }
+    } catch {}
+  }
+
+  // 额外策略：找 Element UI 的变量编辑面板（小建工风格）
+  if (modals.length === 0) {
+    try {
+      // Look for el-dialog wrapper or Element UI dialog
+      const elDialogs = document.querySelectorAll('.el-dialog__wrapper, .el-dialog, .v-modal');
+      for (const el of Array.from(elDialogs)) {
+        const htmlEl = el as HTMLElement;
+        if (isVisible(htmlEl)) {
+          modals.push(htmlEl);
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  // Final fallback: find the largest content area that contains input elements
+  if (modals.length === 0) {
+    try {
+      let bestEl: HTMLElement | null = null;
+      let bestCount = 0;
+      const candidates = document.querySelectorAll('.content-left, .content-right, .el-col, [class*="panel"], [class*="Panel"]');
+      for (const el of Array.from(candidates)) {
+        const htmlEl = el as HTMLElement;
+        if (!isVisible(htmlEl)) continue;
+        const inputs = htmlEl.querySelectorAll('input, textarea, .el-input__inner, .el-textarea__inner');
+        if (inputs.length > bestCount) {
+          bestCount = inputs.length;
+          bestEl = htmlEl;
+        }
+      }
+      if (bestEl && bestCount > 0) {
+        modals.push(bestEl);
       }
     } catch {}
   }
@@ -587,8 +625,12 @@ function getToggleState(el: HTMLElement): boolean {
   if (ariaChecked !== null) {
     return ariaChecked === 'true';
   }
-  // 对于 class 判断（ant-switch-checked 等）
+  // Element UI switch: .is-active or .is-checked
   const classStr = el.className?.toString() || '';
+  if (classStr.includes('el-switch')) {
+    return classStr.includes('is-active') || classStr.includes('is-checked');
+  }
+  // Ant Design switch: ant-switch-checked
   return classStr.includes('checked') || classStr.includes('active');
 }
 
@@ -983,9 +1025,9 @@ function getAllRowInputs(): HTMLElement[] {
   const modals = findVisibleModals();
   const scope = modals.length > 0 ? modals[0] : document.body;
 
-  // Strategy 1: Standard inputs
+  // Strategy 1: Standard inputs + Element UI inputs
   scope.querySelectorAll(
-    'input[type="text"], input:not([type]), textarea'
+    'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner'
   ).forEach((el) => {
     const htmlEl = el as HTMLElement;
     if (isVisible(htmlEl)) inputs.push(htmlEl);
@@ -1053,10 +1095,12 @@ function getAllToggles(): HTMLElement[] {
 
   const toggles: HTMLElement[] = [];
   scope.querySelectorAll(
-    '[role="switch"], .ant-switch, .el-switch, [class*="switch"]'
+    '[role="switch"], .ant-switch, .el-switch, [class*="switch"], .el-switch__core'
   ).forEach((el) => {
     const htmlEl = el as HTMLElement;
-    if (isVisible(htmlEl)) toggles.push(htmlEl);
+    // For el-switch__core, use its parent wrapper
+    const toggleEl = el.classList.contains('el-switch__core') ? el.closest('.el-switch') as HTMLElement : htmlEl;
+    if (toggleEl && isVisible(toggleEl) && !toggles.includes(toggleEl)) toggles.push(toggleEl);
   });
 
   console.log(`[FormSnap] getAllToggles found ${toggles.length} in scope:`,
