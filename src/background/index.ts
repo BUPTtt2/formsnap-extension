@@ -241,6 +241,24 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'DIAGNOSE_PAGE': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ error: '未找到活动标签页' });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_DIAGNOSE' }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { error: '无响应' });
+            }
+          });
+        });
+        return true;
+      }
+
       case 'AI_MATCH_FIELDS': {
         // AI-powered matching: use user-provided target screenshots
         if (!message.payload || !message.payload.parsedFields || !message.payload.formFields) {

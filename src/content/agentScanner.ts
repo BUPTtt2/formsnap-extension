@@ -1066,6 +1066,60 @@ function getAllToggles(): HTMLElement[] {
 }
 
 /**
+ * 诊断：dump 弹窗/表单的 DOM 结构，帮助调试选择器问题。
+ */
+function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles: string[]; fixedContainers: string[] } {
+  const result = { modals: [] as string[], inputs: [] as string[], toggles: [] as string[], fixedContainers: [] as string[] };
+
+  // Check all potential modal selectors
+  const modalSelectors = [
+    '[role="dialog"]', '.ant-modal', '.el-dialog', '[aria-modal="true"]',
+    '[class*="Modal"]', '[class*="modal"]', '[class*="Drawer"]', '[class*="drawer"]',
+    '[class*="dialog-content"]', '[class*="Dialog-content"]', '[class*="popup-content"]',
+    '[class*="panel-content"]', '[class*="slide-panel"]', '[class*="edit-panel"]',
+  ];
+  for (const sel of modalSelectors) {
+    try {
+      const nodes = document.querySelectorAll(sel);
+      nodes.forEach((node) => {
+        const el = node as HTMLElement;
+        if (isVisible(el)) {
+          result.modals.push(`${sel} → <${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 80) || ''}"> (${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)})`);
+        }
+      });
+    } catch {}
+  }
+
+  // Check inputs
+  document.querySelectorAll('input, textarea, [contenteditable="true"], .ant-input, .ant-input-affix-wrapper').forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (htmlEl.getBoundingClientRect().width > 10) {
+      result.inputs.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" type="${(el as HTMLInputElement).type || ''}" placeholder="${(el as HTMLInputElement).placeholder || ''}"> size=${Math.round(htmlEl.getBoundingClientRect().width)}x${Math.round(htmlEl.getBoundingClientRect().height)}`);
+    }
+  });
+
+  // Check toggles
+  document.querySelectorAll('[role="switch"], .ant-switch, [class*="switch"]').forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (isVisible(htmlEl)) {
+      result.toggles.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" aria-checked="${el.getAttribute('aria-checked') || ''}">`);
+    }
+  });
+
+  // Check fixed containers
+  document.querySelectorAll('*').forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    const style = window.getComputedStyle(htmlEl);
+    if (style.position === 'fixed' && parseInt(style.zIndex) > 100) {
+      const rect = htmlEl.getBoundingClientRect();
+      if (rect.width > 300 && rect.height > 200) {
+        result.fixedContainers.push(`<${el.tagName.toLowerCase()} class="${htmlEl.className?.toString().slice(0, 80) || ''}" zIndex=${style.zIndex} (${Math.round(rect.width)}x${Math.round(rect.height)})`);
+      }
+    }
+  });
+
+  return result;
+}
 
 /**
  * 常量：消息类型枚举
@@ -1077,6 +1131,7 @@ export const AGENT_MESSAGE_TYPES = {
   EXEC_DETECT_PAGE_MODE: 'EXEC_DETECT_PAGE_MODE',
   EXEC_FILL_TABLE_MULTI_ROW: 'EXEC_FILL_TABLE_MULTI_ROW',
   EXEC_FILL_ROW_BY_ROW: 'EXEC_FILL_ROW_BY_ROW',
+  EXEC_DIAGNOSE: 'EXEC_DIAGNOSE',
 } as const;
 
 chrome.runtime.onMessage.addListener(
@@ -1128,6 +1183,13 @@ chrome.runtime.onMessage.addListener(
             addButtonSelector?: string;
           };
           fillRowByRowAgent(dataRows, addButtonSelector).then(sendResponse);
+          return true;
+        }
+
+        case AGENT_MESSAGE_TYPES.EXEC_DIAGNOSE: {
+          const diagResult = diagnosePageStructure();
+          console.log('[FormSnap] Diagnose result:', diagResult);
+          sendResponse(diagResult);
           return true;
         }
 

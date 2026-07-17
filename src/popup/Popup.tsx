@@ -937,6 +937,31 @@ export default function Popup() {
     setLoading(false);
   }, [parsedFields]);
 
+  // Diagnose page structure
+  const handleDiagnose = useCallback(async () => {
+    try {
+      const result = await sendMessage<{ modals: string[]; inputs: string[]; toggles: string[]; fixedContainers: string[] }>('DIAGNOSE_PAGE', {});
+      const lines = [
+        `=== 弹窗 (${result.modals?.length || 0}) ===`,
+        ...(result.modals || []).join('\n').split('\n'),
+        '',
+        `=== 输入框 (${result.inputs?.length || 0}) ===`,
+        ...(result.inputs || []).join('\n').split('\n'),
+        '',
+        `=== 开关 (${result.toggles?.length || 0}) ===`,
+        ...(result.toggles || []).join('\n').split('\n'),
+        '',
+        `=== Fixed 容器 (${result.fixedContainers?.length || 0}) ===`,
+        ...(result.fixedContainers || []).join('\n').split('\n'),
+      ];
+      setStatus({ type: 'info', text: `诊断完成：${result.inputs?.length || 0} 输入框, ${result.toggles?.length || 0} 开关, ${result.fixedContainers?.length || 0} 固定容器` });
+      // Also log to console for user to copy
+      console.log('[FormSnap] Diagnose:\n' + lines.join('\n'));
+    } catch (err: any) {
+      setStatus({ type: 'error', text: '诊断失败: ' + (err.message || '未知错误') });
+    }
+  }, []);
+
   // Load history
   const handleLoadHistory = useCallback(async () => {
     try {
@@ -1043,6 +1068,7 @@ export default function Popup() {
       <div className="header">
         <h1>FormSnap</h1>
         <div className="header-actions">
+          <button className="icon-btn" onClick={handleDiagnose} title="诊断页面结构">🔍</button>
           <button className="icon-btn" onClick={handleLoadHistory} title="查看历史">📁</button>
           <button className="icon-btn" onClick={openSettings} title="设置">⚙</button>
         </div>
