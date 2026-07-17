@@ -872,6 +872,70 @@ export default function Popup() {
     setShowManualAdd(false);
   };
 
+  // Agent 逐行填写：直接在小建工等页面上逐行新增+填写
+  const handleRowByRowFill = useCallback(async () => {
+    // Check if data has row-grouped format (e.g. "1.名称", "2.名称")
+    const groups: Record<string, ParsedField[]> = {};
+    parsedFields.forEach((f) => {
+      const match = f.field.match(/^(\d+)\./);
+      const key = match ? match[1] : '_flat';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(f);
+    });
+    const rowKeys = Object.keys(groups).filter((k) => k !== '_flat').sort((a, b) => +a - +b);
+
+    if (rowKeys.length === 0) {
+      setStatus({ type: 'error', text: '数据不是表格格式，请使用"扫描页面并填写"模式' });
+      return;
+    }
+
+    setLoading(true);
+    setStep('filling');
+    setStatus({ type: 'loading', text: `Agent 正在逐行填写（共 ${rowKeys.length} 行）...` });
+    setAgentProgress({ current: 0, total: rowKeys.length });
+
+    try {
+      const dataRows = rowKeys.map((key) =>
+        groups[key].map((f) => ({
+          colName: f.field.replace(/^\d+\./, ''),
+          value: f.value,
+          type: f.type,
+        }))
+      );
+
+      // Inject content script if needed
+      const tab = await getCurrentTab();
+      try {
+        await sendMessageToTab(tab.id!, 'SCAN_FORM');
+      } catch {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id! },
+            files: ['content.js'],
+          });
+          await new Promise((r) => setTimeout(r, 500));
+        } catch {}
+      }
+
+      const result = await sendMessage<{ totalRows: number; filledRows: number; errors: string[] }>(
+        'FILL_ROW_BY_ROW',
+        { dataRows }
+      );
+
+      setAgentProgress(null);
+      setFillResult({ total: result.totalRows, success: result.filledRows, failed: result.totalRows - result.filledRows });
+      setCanUndo(false);
+      setStep('done');
+      const errHint = result.errors.length > 0 ? `（${result.errors.length} 个警告）` : '';
+      setStatus({ type: 'success', text: `逐行填写完成：${result.filledRows}/${result.totalRows} 行成功${errHint}` });
+    } catch (err: any) {
+      setAgentProgress(null);
+      setStatus({ type: 'error', text: '逐行填写失败: ' + (err.message || '未知错误') });
+      setStep('data-review');
+    }
+    setLoading(false);
+  }, [parsedFields]);
+
   const handleReset = () => {
     setStep('input'); setImagePreviews([]); setImagesBase64([]); setTextContent('');
     setParsedFields([]); setParsedRows([]); setFormFields([]); setMappings([]); setFillResult(null);
@@ -1209,10 +1273,33 @@ export default function Popup() {
 
           <div className="action-bar">
             <button className="btn btn-outline" onClick={handleReset}>返回</button>
-            <button className="btn btn-primary" onClick={handleScanAndFill} disabled={loading}>
+            <button className="btn btn-primary" onClick={handleScanAndFill} disabled={loading}
+              style={{ fontSize: 12, padding: '6px 12px' }}>
               扫描页面并填写
             </button>
           </div>
+
+          {/* Agent row-by-row fill for table data */}
+          {parsedFields.some((f) => /^\d+\./.test(f.field)) && (
+            <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 8, fontSize: 12 }}>
+              <div style={{ marginBottom: 6, fontWeight: 600, color: '#7c3aed' }}>🤖 Agent 逐行填写模式</div>
+              <div style={{ marginBottom: 8, fontSize: 11, color: '#6b7280' }}>
+                检测到表格数据（{parsedFields.filter((f) => /^\d+\.名称/.test(f.field)).length} 行）。Agent 将自动：
+                点击"+ 新增" → 填写名称/描述/默认值 → 设置开关 → 重复下一行
+              </div>
+              <div style={{ marginBottom: 8, padding: '6px 10px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 6, fontSize: 11, color: '#b45309' }}>
+                请确保目标页面的变量编辑弹窗已打开，且当前行为空行
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={handleRowByRowFill}
+                disabled={loading}
+                style={{ width: '100%', borderColor: '#8b5cf6', background: '#7c3aed' }}
+              >
+                开始逐行填写（Agent 自动操作）
+              </button>
+            </div>
+          )}
         </div>
       )}
 

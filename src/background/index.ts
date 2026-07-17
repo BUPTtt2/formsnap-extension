@@ -201,6 +201,25 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'FILL_ROW_BY_ROW': {
+        // 逐行新增填写引擎（小建工风格：点击新增→填写→循环）
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ totalRows: 0, filledRows: 0, errors: ['未找到活动标签页'] });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_FILL_ROW_BY_ROW', payload: message.payload }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ totalRows: 0, filledRows: 0, errors: [chrome.runtime.lastError.message] });
+            } else {
+              sendResponse(response || { totalRows: 0, filledRows: 0, errors: ['无响应'] });
+            }
+          });
+        });
+        return true;
+      }
+
       case 'AI_MATCH_FIELDS': {
         // AI-powered matching: use user-provided target screenshots
         if (!message.payload || !message.payload.parsedFields || !message.payload.formFields) {

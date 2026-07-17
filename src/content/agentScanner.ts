@@ -816,7 +816,174 @@ export function detectPageMode(): PageModeResult {
   }
 }
 
-// ========================== 6. 消息监听 ==========================
+// ========================== 6. 逐行新增填写引擎（小建工风格）==========================
+
+/**
+ * 逐行新增填写：适用于"只有一行输入框 + 新增按钮"的场景（如小建工变量编辑器）。
+ * 流程：点击"+ 新增" → 等待新行出现 → 扫描当前行的输入框 → 依次填入字段值 → 循环。
+ *
+ * @param dataRows 每行数据的数组，每行是 { colName, value, type }[]
+ * @param addButtonSelector "+ 新增"按钮的选择器（可选，自动查找）
+ */
+export async function fillRowByRowAgent(
+  dataRows: { colName: string; value: string; type: string }[][],
+  addButtonSelector?: string
+): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
+  const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
+
+  for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
+    const rowData = dataRows[rowIdx];
+    try {
+      // 1. 如果不是第一行，点击"+ 新增"按钮
+      if (rowIdx > 0) {
+        let added = false;
+        if (addButtonSelector) {
+          const btn = document.querySelector(addButtonSelector) as HTMLElement | null;
+          if (btn) {
+            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await delay(300);
+            btn.click();
+            added = true;
+          }
+        }
+        if (!added) {
+          // 自动查找 "+ 新增" 按钮
+          const addButtons = document.querySelectorAll(
+            'button, a, span, div[role="button"], [class*="add"], [class*="Add"], [class*="new"], [class*="New"]'
+          );
+          for (const btn of Array.from(addButtons)) {
+            const el = btn as HTMLElement;
+            const text = el.textContent?.trim() || '';
+            if (text.match(/^[+＋]\s*新增|^新增|^[+＋]\s*Add|^Add|^新增|^添加|^创建/)) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              await delay(300);
+              el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+              el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+              el.click();
+              added = true;
+              break;
+            }
+          }
+        }
+        if (!added) {
+          result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
+          continue;
+        }
+        // 等待新行渲染
+        await delay(1000);
+      }
+
+      // 2. 扫描当前可见的输入框（只取可见的、在弹窗/表格内的）
+      const visibleInputs = findCurrentRowInputs();
+
+      // 3. 逐字段填写
+      let rowFilled = 0;
+      for (const field of rowData) {
+        if (field.type === 'checkbox' || field.type === 'toggle') {
+          // 查找对应的开关元素
+          const toggleEl = findToggleElement(visibleInputs, field.colName);
+          if (toggleEl) {
+            fillToggle(toggleEl, field.value);
+            rowFilled++;
+            await delay(100);
+          }
+          continue;
+        }
+
+        // 找到对应的输入框（按顺序匹配或按标签匹配）
+        const inputEl = findInputForColumn(visibleInputs, field.colName, rowData.indexOf(field));
+        if (inputEl) {
+          setNativeValue(inputEl, field.value);
+          (inputEl as HTMLInputElement)?.focus?.();
+          rowFilled++;
+          await delay(150);
+        } else {
+          result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框`);
+        }
+      }
+
+      if (rowFilled > 0) result.filledRows++;
+      await delay(200);
+    } catch (err) {
+      result.errors.push(`第 ${rowIdx + 1} 行出错: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 查找当前行的所有可见输入元素。
+ * 策略：获取所有 input/textarea/select/contenteditable，按 DOM 顺序排列。
+ */
+function findCurrentRowInputs(): HTMLElement[] {
+  const inputs: HTMLElement[] = [];
+  // 查找弹窗内的输入
+  const modals = findVisibleModals();
+  const scope = modals.length > 0 ? modals[0] : document.body;
+
+  scope.querySelectorAll(
+    'input[type="text"], input:not([type]), textarea, [contenteditable="true"], [contenteditable=""]'
+  ).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    const rect = htmlEl.getBoundingClientRect();
+    if (rect.width > 10 && rect.height > 5) {
+      const style = window.getComputedStyle(htmlEl);
+      if (style.display !== 'none' && style.visibility !== 'hidden') {
+        inputs.push(htmlEl);
+      }
+    }
+  });
+
+  return inputs;
+}
+
+/**
+ * 根据列名或列索引找到对应的输入框。
+ */
+function findInputForColumn(inputs: HTMLElement[], colName: string, colIndex: number): HTMLElement | null {
+  // 策略1：按字符计数匹配（0/50 表示 50 字符限制的输入框）
+  // 策略2：按列索引匹配（第 N 个输入框对应第 N 列）
+  // 名称=第1个, 描述=第2个, 默认值=第3个
+
+  const colOrder = ['名称', '描述', '默认值', 'name', 'desc', 'description', 'default', 'value'];
+  const nameIdx = colOrder.indexOf(colName.toLowerCase());
+
+  if (nameIdx >= 0 && nameIdx < inputs.length) {
+    return inputs[nameIdx];
+  }
+  // 按列索引直接取
+  if (colIndex < inputs.length) {
+    return inputs[colIndex];
+  }
+  return null;
+}
+
+/**
+ * 查找对应的开关/复选框元素。
+ */
+function findToggleElement(inputs: HTMLElement[], colName: string): HTMLElement | null {
+  const modals = findVisibleModals();
+  const scope = modals.length > 0 ? modals[0] : document.body;
+
+  // 查找所有开关
+  const toggles = scope.querySelectorAll(
+    '[role="switch"], .ant-switch, .el-switch, [class*="switch"]'
+  );
+
+  if (toggles.length === 0) return null;
+
+  // 按列名匹配：支持Prompt=第1个开关, 支持工作流=第2个开关
+  const toggleOrder = ['支持prompt', '支持工作流', '清除上下文'];
+  const toggleIdx = toggleOrder.indexOf(colName.toLowerCase().replace(/\s/g, ''));
+
+  if (toggleIdx >= 0 && toggleIdx < toggles.length) {
+    return toggles[toggleIdx] as HTMLElement;
+  }
+  return null;
+}
+
+// ========================== 7. 消息监听 ==========================
 
 /**
  * 常量：消息类型枚举
@@ -827,6 +994,7 @@ export const AGENT_MESSAGE_TYPES = {
   EXEC_ADD_TABLE_ROW: 'EXEC_ADD_TABLE_ROW',
   EXEC_DETECT_PAGE_MODE: 'EXEC_DETECT_PAGE_MODE',
   EXEC_FILL_TABLE_MULTI_ROW: 'EXEC_FILL_TABLE_MULTI_ROW',
+  EXEC_FILL_ROW_BY_ROW: 'EXEC_FILL_ROW_BY_ROW',
 } as const;
 
 chrome.runtime.onMessage.addListener(
@@ -869,7 +1037,16 @@ chrome.runtime.onMessage.addListener(
             tableInfo: TableModalInfo;
           };
           fillTableModalMultiRow(dataRows, tableInfo).then(sendResponse);
-          return true; // 异步响应
+          return true;
+        }
+
+        case AGENT_MESSAGE_TYPES.EXEC_FILL_ROW_BY_ROW: {
+          const { dataRows, addButtonSelector } = message.payload as {
+            dataRows: { colName: string; value: string; type: string }[][];
+            addButtonSelector?: string;
+          };
+          fillRowByRowAgent(dataRows, addButtonSelector).then(sendResponse);
+          return true;
         }
 
         default:
