@@ -134,6 +134,54 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'SCAN_TABLE_MODAL': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ detected: false, error: '未找到活动标签页' });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_SCAN_TABLE_MODAL' }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ detected: false, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { detected: false });
+            }
+          });
+        });
+        return true;
+      }
+
+      case 'ADD_TABLE_ROW': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) { sendResponse({ success: false, error: '未找到活动标签页' }); return; }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_ADD_TABLE_ROW', payload: message.payload }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { success: false });
+            }
+          });
+        });
+        return true;
+      }
+
+      case 'FILL_TABLE_MODAL': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) { sendResponse({ total: 0, success: 0, failed: 0, error: '未找到活动标签页' }); return; }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_FILL_TABLE_MODAL', payload: message.payload }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ total: 0, success: 0, failed: 0, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { total: 0, success: 0, failed: 0 });
+            }
+          });
+        });
+        return true;
+      }
+
       case 'FILL_TABLE_MULTI_ROW': {
         // 转发给 content script 执行多行表格填写
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
