@@ -1114,27 +1114,92 @@ export default function Popup() {
             数据解析完成。请确认字段无误后，点击下方按钮扫描页面并填写。
           </div>
 
-          {/* Show parsed fields */}
-          <div style={{ marginBottom: 12, maxHeight: 200, overflowY: 'auto' }}>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                  <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>字段</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>值</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>类型</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parsedFields.map((f, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                    <td style={{ padding: '4px 8px', color: '#374151' }}>{f.field}</td>
-                    <td style={{ padding: '4px 8px', color: '#6b7280', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.value}</td>
-                    <td style={{ padding: '4px 8px', color: '#9ca3af', fontSize: 11 }}>{f.type}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* Group parsed fields by row number (from "1.名称" format) */}
+          {(() => {
+            const groups: Record<string, ParsedField[]> = {};
+            parsedFields.forEach((f) => {
+              const match = f.field.match(/^(\d+)\./);
+              const key = match ? match[1] : '_flat';
+              if (!groups[key]) groups[key] = [];
+              groups[key].push(f);
+            });
+            const isGrouped = Object.keys(groups).some((k) => k !== '_flat');
+            if (!isGrouped) {
+              // Flat display (original)
+              return (
+                <div style={{ marginBottom: 12, maxHeight: 200, overflowY: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                    <thead><tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                      <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>字段</th>
+                      <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>值</th>
+                      <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6b7280', fontWeight: 500 }}>类型</th>
+                    </tr></thead>
+                    <tbody>
+                      {parsedFields.map((f, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                          <td style={{ padding: '4px 8px', color: '#374151' }}>{f.field}</td>
+                          <td style={{ padding: '4px 8px', color: '#6b7280', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.value || '(空)'}</td>
+                          <td style={{ padding: '4px 8px', color: '#9ca3af', fontSize: 11 }}>{f.type}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }
+            // Grouped display — each row of the original table is a collapsible group
+            const sortedKeys = Object.keys(groups).filter((k) => k !== '_flat').sort((a, b) => +a - +b);
+            const flatFields = groups['_flat'] || [];
+            return (
+              <div style={{ marginBottom: 12, maxHeight: 250, overflowY: 'auto' }}>
+                {sortedKeys.map((rowKey) => {
+                  const rowFields = groups[rowKey];
+                  // Find the "name" field for the row header
+                  const nameField = rowFields.find((f) => f.field.includes('名称'));
+                  return (
+                    <details key={rowKey} style={{ marginBottom: 6, border: '1px solid #e5e7eb', borderRadius: 6 }} open>
+                      <summary style={{ padding: '6px 10px', cursor: 'pointer', fontWeight: 600, fontSize: 12, color: '#374151', background: '#f9fafb', borderRadius: 6 }}>
+                        第 {rowKey} 行{nameField ? ` — ${nameField.value}` : ''}
+                        <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: 8 }}>({rowFields.length} 个字段)</span>
+                      </summary>
+                      <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                        <tbody>
+                          {rowFields.map((f, i) => {
+                            const colName = f.field.replace(/^\d+\./, '');
+                            return (
+                              <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                <td style={{ padding: '3px 10px', color: '#374151', fontWeight: 500, width: '40%' }}>{colName}</td>
+                                <td style={{ padding: '3px 10px', color: '#6b7280' }}>{f.value || '(空)'}</td>
+                                <td style={{ padding: '3px 10px', color: '#9ca3af', fontSize: 10 }}>{f.type}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </details>
+                  );
+                })}
+                {flatFields.length > 0 && (
+                  <details style={{ marginBottom: 6, border: '1px solid #e5e7eb', borderRadius: 6 }}>
+                    <summary style={{ padding: '6px 10px', cursor: 'pointer', fontWeight: 600, fontSize: 12, color: '#374151', background: '#f9fafb', borderRadius: 6 }}>
+                      其他字段 <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: 8 }}>({flatFields.length} 个)</span>
+                    </summary>
+                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                      <tbody>
+                        {flatFields.map((f, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                            <td style={{ padding: '3px 10px', color: '#374151', fontWeight: 500, width: '40%' }}>{f.field}</td>
+                            <td style={{ padding: '3px 10px', color: '#6b7280' }}>{f.value || '(空)'}</td>
+                            <td style={{ padding: '3px 10px', color: '#9ca3af', fontSize: 10 }}>{f.type}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </details>
+                )}
+              </div>
+            );
+          })()}
 
           {parsedRows.length > 1 && (
             <div style={{ marginBottom: 12, padding: '6px 10px', background: 'rgba(59,130,246,0.06)', borderRadius: 6, fontSize: 11, color: '#2563eb' }}>
