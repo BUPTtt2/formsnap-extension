@@ -20,19 +20,34 @@ function detectFieldType(el: HTMLElement): FieldType {
 
 /**
  * Find active/visible modal or dialog on the page.
- * Returns the modal container element if found, null otherwise.
+ * Returns the innermost content container that contains form elements.
  */
 function findActiveModal(): HTMLElement | null {
+  const candidates: HTMLElement[] = [];
+
+  // Phase 1: collect all visible modal-like elements
   const selectors = [
     '[role="dialog"]',
     '.ant-modal-wrap',
     '.el-dialog',
     '[aria-modal="true"]',
-    '[class*="Modal"]:not([class*="modal-mask"]):not([class*="Mask"])',
+    '[class*="Modal"]:not([class*="modal-mask"]):not([class*="Mask"]):not([class*="modalWrap"])',
     '[class*="Drawer"]',
     '[class*="drawer"]',
     '.ant-drawer-content',
     '[class*="dialog"]',
+    '.ant-modal-content',
+    '.el-dialog__body',
+    '.ant-drawer-body',
+    '[class*="modal-body"]',
+    '[class*="ModalBody"]',
+    '[class*="drawer-body"]',
+    // Coze / Dify style variable editors
+    '[class*="variable"]',
+    '[class*="Variable"]',
+    '[class*="field-editor"]',
+    '[class*="FieldEditor"]',
+    '[class*="form-panel"]',
   ];
   for (const sel of selectors) {
     try {
@@ -41,14 +56,31 @@ function findActiveModal(): HTMLElement | null {
         const el = node as HTMLElement;
         const style = window.getComputedStyle(el);
         if (style.display !== 'none' && style.visibility !== 'hidden') {
-          return el;
+          candidates.push(el);
         }
       }
     } catch {
       // invalid selector, skip
     }
   }
-  return null;
+
+  if (candidates.length === 0) return null;
+
+  // Phase 2: prefer the candidate that contains the most input elements
+  let best: HTMLElement | null = null;
+  let bestCount = 0;
+  for (const el of candidates) {
+    const inputs = el.querySelectorAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea, [contenteditable="true"], [contenteditable=""]'
+    );
+    if (inputs.length > bestCount) {
+      bestCount = inputs.length;
+      best = el;
+    }
+  }
+
+  // Only return if we found at least one input in the modal
+  return bestCount > 0 ? best : null;
 }
 
 /**
@@ -615,6 +647,83 @@ export function scanPageForms(): FormField[] {
       tagName: htmlEl.tagName.toLowerCase(),
     });
   });
+
+  // Fallback: if modal scan returned empty, retry with full page scan
+  if (isModalMode && fields.length === 0) {
+    const fallbackInputs = document.querySelectorAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
+    );
+    const fallbackShadow = collectShadowFormElements();
+    const fallbackAll: Element[] = Array.from(fallbackInputs);
+    fallbackShadow.forEach((el) => {
+      if (!fallbackAll.includes(el)) fallbackAll.push(el);
+    });
+
+    fallbackAll.forEach((el) => {
+      const htmlEl = el as HTMLElement;
+      const type = detectFieldType(htmlEl);
+      const label = getLabelForElement(htmlEl);
+
+      if (type === 'radio') {
+        const name = (el as HTMLInputElement).name;
+        if (!name || processedRadioGroups.has(name)) return;
+        processedRadioGroups.add(name);
+        const selector = `input[type="radio"][name="${CSS.escape(name)}"]`;
+        if (seenSelectors.has(selector)) return;
+        seenSelectors.add(selector);
+        fields.push({
+          selector, label, type: 'radio', name,
+          options: getRadioGroupOptions(name),
+          radioGroup: name,
+        });
+        return;
+      }
+
+      const selector = getSelector(htmlEl);
+      if (seenSelectors.has(selector)) return;
+      seenSelectors.add(selector);
+
+      const field: FormField = {
+        selector, label, type,
+        name: (el as HTMLInputElement).name || undefined,
+        id: el.id || undefined,
+        placeholder: (el as HTMLInputElement).placeholder || undefined,
+        tagName: el.tagName.toLowerCase(),
+      };
+      if (type === 'select') {
+        field.options = getOptionsForSelect(el as HTMLSelectElement);
+      }
+      fields.push(field);
+    });
+
+    // Also scan editables
+    const fallbackEditables = findAllEditableElements();
+    fallbackEditables.forEach((el) => {
+      if (seenElements.has(el)) return;
+      seenElements.add(el);
+      const htmlEl = el as HTMLElement;
+      if (htmlEl.closest('input, textarea, select')) return;
+      const rect = htmlEl.getBoundingClientRect();
+      if (rect.width < 20 || rect.height < 12) return;
+      const style = window.getComputedStyle(htmlEl);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
+      const containsOther = fallbackEditables.some((other) => other !== htmlEl && htmlEl.contains(other));
+      if (containsOther) return;
+      const selector = getSelectorRobust(htmlEl);
+      if (seenSelectors.has(selector)) return;
+      seenSelectors.add(selector);
+      const label = getLabelForElement(htmlEl);
+      fields.push({
+        selector,
+        label: label || `单元格 ${fields.length + 1}`,
+        type: 'text',
+        name: htmlEl.getAttribute('data-field') || htmlEl.getAttribute('name') || undefined,
+        id: htmlEl.id || undefined,
+        placeholder: htmlEl.getAttribute('data-placeholder') || htmlEl.getAttribute('placeholder') || undefined,
+        tagName: htmlEl.tagName.toLowerCase(),
+      });
+    });
+  }
 
   return fields;
 }
