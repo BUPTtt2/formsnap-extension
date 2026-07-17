@@ -393,6 +393,25 @@ export default function Popup() {
         }
       }
 
+      // Match quality check: if scanned fields poorly match data source, fall back to virtual mode
+      if (scanResult.fields?.length && fields.length > 0) {
+        const preMatch = clientSideMatch(fields, scanResult.fields);
+        const matchedCount = preMatch.filter((m) => m.confidence >= 0.5 && m.targetField.selector).length;
+        const matchRate = matchedCount / fields.length;
+
+        if (matchRate < 0.3 && !scanResult.canvasInfo?.detected && pageMode !== 'table-modal') {
+          // Less than 30% of source fields have a decent match → use virtual mode
+          setStatus({ type: 'info', text: `扫描到的 ${scanResult.fields.length} 个字段与数据源匹配度过低（${Math.round(matchRate * 100)}%），切换为虚拟字段模式` });
+          const virtualFields: FormField[] = fields.map((f, i) => ({
+            label: f.field,
+            selector: `__virtual_${i}`,
+            type: f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'select' ? 'select' : f.type === 'checkbox' ? 'checkbox' : f.type === 'radio' ? 'radio' : 'text',
+          }));
+          scanResult = { ...scanResult, fields: virtualFields };
+          setPageMode('virtual-manual');
+        }
+      }
+
       await proceedWithScanResult(fields, scanResult);
     } catch (err: any) {
       setStatus({ type: 'error', text: err.message || '处理失败' });
