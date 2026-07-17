@@ -108,6 +108,39 @@ function getLabelForElement(el: HTMLElement): string {
     }
   }
 
+  // Strategy 0.5: Table cell - extract column header from table structure
+  const cell = el.closest('td, th, [role="cell"], [role="gridcell"]');
+  if (cell) {
+    const row = cell.parentElement;
+    if (row) {
+      const cellIndex = Array.from(row.children).indexOf(cell);
+      const table = cell.closest('table, [role="grid"], [role="table"]');
+      if (table) {
+        const allRows = table.querySelectorAll('tr, [role="row"]');
+        // Look for header row (<th> or role="columnheader")
+        for (const headerRow of allRows) {
+          const headerCell = headerRow.children[cellIndex] as HTMLElement | undefined;
+          if (headerCell) {
+            const tag = headerCell.tagName?.toLowerCase();
+            const role = headerCell.getAttribute('role');
+            if (tag === 'th' || role === 'columnheader' || role === 'rowheader') {
+              const text = headerCell.textContent?.trim();
+              if (text) return text;
+            }
+          }
+        }
+        // Fallback: use first row as header (some tables use <td> for headers)
+        for (const headerRow of allRows) {
+          const headerCell = headerRow.children[cellIndex] as HTMLElement | undefined;
+          if (headerCell) {
+            const text = headerCell.textContent?.trim();
+            if (text && text.length < 50) return text;
+          }
+        }
+      }
+    }
+  }
+
   const id = el.id;
   if (id) {
     const label = document.querySelector(`label[for="${CSS.escape(id)}"]`);
