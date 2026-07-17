@@ -1,24 +1,34 @@
 import { ParsedField, ExtensionSettings } from './types';
 
 function buildParsePrompt(): string {
-  return `你是一个表单数据提取助手。用户会提供一段文本或一张截图，里面包含字段名和对应的值。
-请提取所有字段，返回严格的 JSON 数组格式。
+  return `你是一个精确的数据提取助手。用户会提供一段文本或一张截图，里面可能包含表格、字段列表或结构化数据。
+
+**核心要求：提取所有可见的数据，不要遗漏任何行列！**
+
+如果内容是表格结构（有多行多列），请为每一行的每个单元格都生成一个字段。
+field 使用 "行号.列名" 格式（如 "1.名称", "2.描述"），value 是单元格的值。
 
 规则：
 1. 每个字段包含 field（字段名）、value（值）、type（字段类型）
-2. type 可能的值：text（文本）、select（下拉选择）、radio（单选）、checkbox（复选框）、date（日期）、number（数字）
-3. 如果字段名和值的关系不明显，尽量从上下文推断
-4. **不要遗漏任何字段！仔细检查每个可见的字段**
-5. 只返回 JSON 数组，不要其他文字
-6. 数值类型请完整保留，不要截断小数位
+2. type 可能的值：text（文本）、select（下拉选择）、radio（单选）、checkbox（复选框/开关，值用"开"/"关"表示）、date（日期）、number（数字）
+3. 对于复选框/开关类型，值为"开"或"关"
+4. 空值用空字符串 "" 表示，不要省略
+5. **不要遗漏任何字段！仔细检查每个可见的单元格**
+6. 只返回 JSON 数组，不要其他文字
+7. 数值类型请完整保留，不要截断小数位
 
-示例输出：
+示例 - 对于一个有3行5列的表格：
 [
-  {"field": "名称", "value": "张三", "type": "text"},
-  {"field": "类型", "value": "选项A", "type": "select"}
+  {"field": "1.名称", "value": "energy_level", "type": "text"},
+  {"field": "1.描述", "value": "当前能量等级", "type": "text"},
+  {"field": "1.默认值", "value": "ok", "type": "text"},
+  {"field": "1.支持Prompt", "value": "开", "type": "checkbox"},
+  {"field": "1.支持工作流", "value": "开", "type": "checkbox"},
+  {"field": "2.名称", "value": "energy_score", "type": "text"},
+  ...
 ]
 
-请提取以下内容中的所有字段和值：`;
+请提取以下内容中的所有数据：`;
 }
 
 function buildMatchPrompt(sourceFields: string[], targetFields: string[]): string {
