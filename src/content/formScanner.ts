@@ -19,12 +19,61 @@ function detectFieldType(el: HTMLElement): FieldType {
 }
 
 /**
+ * Find active/visible modal or dialog on the page.
+ * Returns the modal container element if found, null otherwise.
+ */
+function findActiveModal(): HTMLElement | null {
+  const selectors = [
+    '[role="dialog"]',
+    '.ant-modal-wrap',
+    '.el-dialog',
+    '[aria-modal="true"]',
+    '[class*="Modal"]:not([class*="modal-mask"]):not([class*="Mask"])',
+    '[class*="Drawer"]',
+    '[class*="drawer"]',
+    '.ant-drawer-content',
+    '[class*="dialog"]',
+  ];
+  for (const sel of selectors) {
+    try {
+      const nodes = document.querySelectorAll(sel);
+      for (const node of Array.from(nodes)) {
+        const el = node as HTMLElement;
+        const style = window.getComputedStyle(el);
+        if (style.display !== 'none' && style.visibility !== 'hidden') {
+          return el;
+        }
+      }
+    } catch {
+      // invalid selector, skip
+    }
+  }
+  return null;
+}
+
+/**
  * Get label for a contenteditable element.
  * Tries multiple strategies that work with both standard <table> and non-standard (div-based) grids.
  */
 function getLabelForElement(el: HTMLElement): string {
   if (el.isContentEditable) {
     return getLabelForEditable(el);
+  }
+
+  // Strategy 0: form-item container (Ant Design, Element UI, etc.)
+  const formItem = el.closest('.form-item, .ant-form-item, .el-form-item, [class*="form-item"], [class*="formItem"]');
+  if (formItem) {
+    const labelEl = formItem.querySelector('.form-item-label, .ant-form-item-label, .el-form-item__label, [class*="label"]');
+    if (labelEl) {
+      const text = labelEl.textContent?.trim();
+      if (text) return text;
+    }
+    // Try first child as label
+    const firstChild = formItem.firstElementChild;
+    if (firstChild && firstChild !== el.closest('.form-item-content, .ant-form-item-control, .el-form-item__content')) {
+      const text = firstChild.textContent?.trim();
+      if (text && text.length < 50) return text;
+    }
   }
 
   const id = el.id;
@@ -39,6 +88,23 @@ function getLabelForElement(el: HTMLElement): string {
     const text = clone.textContent?.trim();
     if (text) return text;
   }
+
+  // Strategy: sibling text nodes in parent
+  const parent = el.parentElement;
+  if (parent) {
+    const directTexts = Array.from(parent.childNodes)
+      .filter((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim())
+      .map((n) => n.textContent!.trim());
+    if (directTexts.length > 0 && directTexts[0].length < 50) return directTexts[0];
+
+    // Strategy: previous sibling text
+    const prevSibling = el.previousElementSibling;
+    if (prevSibling) {
+      const text = prevSibling.textContent?.trim();
+      if (text && text.length < 50) return text;
+    }
+  }
+
   const ariaLabel = el.getAttribute('aria-label');
   if (ariaLabel) return ariaLabel.trim();
   const labelledBy = el.getAttribute('aria-labelledby');
@@ -440,15 +506,29 @@ export function scanPageForms(): FormField[] {
   const seenSelectors = new Set<string>();
   const processedRadioGroups = new Set<string>();
 
-  // Scan standard form elements（主文档）
-  const inputs = document.querySelectorAll(
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
-  );
+  // 1. Detect active modal/dialog
+  const activeModal = findActiveModal();
+  const isModalMode = !!activeModal;
 
-  // 同时收集 Shadow DOM 内的表单元素
-  const shadowInputs = collectShadowFormElements();
+  // 2. Scan standard form elements within scope
+  let inputs: NodeListOf<Element>;
+  if (activeModal) {
+    inputs = activeModal.querySelectorAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
+    );
+  } else {
+    inputs = document.querySelectorAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]), select, textarea'
+    );
+  }
 
-  // 合并去重：将 shadowInputs 中不在主文档查询结果中的元素加入
+  // 3. Collect Shadow DOM form elements (filter by modal scope if in modal mode)
+  const shadowInputs = collectShadowFormElements().filter((el) => {
+    if (isModalMode) return activeModal!.contains(el) || activeModal!.querySelector(`[id="${CSS.escape(el.id)}"]`) !== null;
+    return true;
+  });
+
+  // 4. Merge and deduplicate
   const mainInputSet = new Set(inputs);
   const allInputs: Element[] = Array.from(inputs);
   shadowInputs.forEach((el) => {
@@ -495,8 +575,11 @@ export function scanPageForms(): FormField[] {
     fields.push(field);
   });
 
-  // Scan contenteditable elements using robust discovery
-  const editables = findAllEditableElements();
+  // 5. Scan contenteditable elements (scoped to modal if in modal mode)
+  const editables = findAllEditableElements().filter((el) => {
+    if (isModalMode) return activeModal!.contains(el);
+    return true;
+  });
   const seenElements = new Set<Element>();
 
   editables.forEach((el) => {
