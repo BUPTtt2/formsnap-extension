@@ -533,6 +533,11 @@ function fillToggle(el: HTMLElement, value: string): void {
   if (currentState !== booleanValue) {
     el.click();
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    // Also try React-compatible click
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log(`[FormSnap] Toggle: ${currentState} → ${booleanValue}, clicked`, el.className);
+  } else {
+    console.log(`[FormSnap] Toggle: already ${booleanValue}, skip`);
   }
 }
 
@@ -875,12 +880,13 @@ export async function fillRowByRowAgent(
         // Wait for new row to render
         await delay(1000);
       } else {
-        // First row: snapshot current counts (this row already exists)
-        const allInputs = getAllRowInputs();
-        const allToggles = getAllToggles();
-        prevInputCount = allInputs.length;
-        prevToggleCount = allToggles.length;
-      }
+          // First row: snapshot current counts (this row already exists)
+          const allInputs = getAllRowInputs();
+          const allToggles = getAllToggles();
+          prevInputCount = allInputs.length;
+          prevToggleCount = allToggles.length;
+          console.log(`[FormSnap] Row 0: ${prevInputCount} inputs, ${prevToggleCount} toggles`);
+        }
 
       // Scan inputs: only get the NEW ones (after prevInputCount)
       const allInputsNow = getAllRowInputs();
@@ -908,7 +914,11 @@ export async function fillRowByRowAgent(
         if (inputIdx < newInputs.length) {
           const inputEl = newInputs[inputIdx];
           setNativeValue(inputEl, field.value);
+          // Ensure React picks up the change even for empty values
+          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          inputEl.dispatchEvent(new Event('change', { bubbles: true }));
           (inputEl as HTMLInputElement)?.focus?.();
+          console.log(`[FormSnap] Fill: "${field.colName}" = "${field.value}" into`, inputEl);
           rowFilled++;
           inputIdx++;
           await delay(150);
