@@ -217,17 +217,29 @@ function findVisibleModals(): HTMLElement[] {
     try {
       let bestEl: HTMLElement | null = null;
       let bestCount = 0;
-      const candidates = document.querySelectorAll('.content-left, .content-right, .el-col, [class*="panel"], [class*="Panel"]');
+      // Look for collapse items, cards, panels, or any container with inputs
+      const candidates = document.querySelectorAll(
+        '.content-left, .content-right, .el-col, .card-item, .el-collapse-item__content, ' +
+        '[class*="panel"], [class*="Panel"], [class*="card"], [class*="Card"], ' +
+        '[class*="editor"], [class*="Editor"], [class*="form"], [class*="Form"]'
+      );
       for (const el of Array.from(candidates)) {
         const htmlEl = el as HTMLElement;
         if (!isVisible(htmlEl)) continue;
-        const inputs = htmlEl.querySelectorAll('input, textarea, .el-input__inner, .el-textarea__inner');
-        if (inputs.length > bestCount) {
-          bestCount = inputs.length;
+        // Count all potential inputs including nested ones
+        const inputCount = htmlEl.querySelectorAll(
+          'input, textarea, [contenteditable="true"], .el-input, .ant-input, [tabindex]'
+        ).length;
+        // Also count by visual check: elements with text cursor
+        const focusableCount = htmlEl.querySelectorAll('[tabindex]').length;
+        const totalCount = inputCount + focusableCount;
+        if (totalCount > bestCount) {
+          bestCount = totalCount;
           bestEl = htmlEl;
         }
       }
       if (bestEl && bestCount > 0) {
+        console.log(`[FormSnap] findVisibleModals fallback: using ${bestEl.className?.toString().slice(0, 40)} with ${bestCount} potential inputs`);
         modals.push(bestEl);
       }
     } catch {}
@@ -1017,94 +1029,146 @@ export async function fillRowByRowAgent(
 }
 
 /**
- * 获取弹窗内所有可见输入元素，按 DOM 顺序排列。
- * 覆盖多种框架：标准 input/textarea、contenteditable、Ant Design Input、自定义编辑器。
+ * 通用输入元素检测：不依赖特定框架选择器，而是通过特征推断。
+ * 策略：
+ * 1. 标准 input/textarea/select
+ * 2. contenteditable 元素
+ * 3. tabindex >= 0 且光标样式的元素
+ * 4. Shadow DOM 内的可编辑元素
+ * 5. Vue/React 自定义渲染的输入组件（通过检测 input 事件或 focus 行为）
  */
 function getAllRowInputs(): HTMLElement[] {
   const inputs: HTMLElement[] = [];
   const modals = findVisibleModals();
   const scope = modals.length > 0 ? modals[0] : document.body;
+  const seen = new WeakSet<HTMLElement>();
 
-  // Strategy 1: Standard inputs + Element UI inputs
-  scope.querySelectorAll(
-    'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner'
-  ).forEach((el) => {
-    const htmlEl = el as HTMLElement;
-    if (isVisible(htmlEl)) inputs.push(htmlEl);
+  const addInput = (el: HTMLElement) => {
+    if (seen.has(el)) return;
+    seen.add(el);
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 10 || rect.height < 5) return;
+    if (!isVisible(el)) return;
+    inputs.push(el);
+  };
+
+  // Strategy 1: Standard form elements
+  scope.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="image"]):not([type="reset"]), textarea, select'
+  ).forEach((el) => addInput(el));
+
+  // Strategy 2: contenteditable (any framework)
+  scope.querySelectorAll<HTMLElement>('[contenteditable="true"], [contenteditable=""]').forEach((el) => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 20 && rect.height > 10) addInput(el);
   });
 
-  // Strategy 2: contenteditable elements (rich text editors, Ant Design Input.TextArea, etc.)
-  scope.querySelectorAll(
-    '[contenteditable="true"], [contenteditable=""]'
-  ).forEach((el) => {
-    const htmlEl = el as HTMLElement;
-    const rect = htmlEl.getBoundingClientRect();
-    // Filter: only include reasonably-sized editable elements
-    if (rect.width > 20 && rect.height > 10 && isVisible(htmlEl)) {
-      // Skip if already inside a scanned input/textarea
-      if (!htmlEl.closest('input, textarea')) {
-        inputs.push(htmlEl);
+  // Strategy 3: Elements with text cursor and reasonable size (custom input components)
+  scope.querySelectorAll<HTMLElement>('[tabindex]').forEach((el) => {
+    const style = window.getComputedStyle(el);
+    const cursor = style.cursor;
+    if ((cursor === 'text' || cursor === 'auto') && !el.matches('input, textarea, select, [contenteditable]')) {
+      const rect = el.getBoundingClientRect();
+      // Filter: must look like an input (not a button or large container)
+      if (rect.width > 30 && rect.width < 800 && rect.height > 15 && rect.height < 200) {
+        addInput(el);
       }
     }
   });
 
-  // Strategy 3: Ant Design Input wrapper (.ant-input, .ant-input-affix-wrapper)
-  scope.querySelectorAll(
-    '.ant-input, .ant-input-affix-wrapper, .ant-input-textarea textarea'
-  ).forEach((el) => {
-    const htmlEl = el as HTMLElement;
-    if (isVisible(htmlEl) && !inputs.includes(htmlEl)) {
-      inputs.push(htmlEl);
-    }
-  });
+  // Strategy 4: Shadow DOM traversal
+  const walkShadowDOM = (root: Element) => {
+    try {
+      const shadow = (root as HTMLElement).shadowRoot;
+      if (!shadow) return;
+      shadow.querySelectorAll<HTMLElement>(
+        'input, textarea, [contenteditable="true"], [tabindex]'
+      ).forEach((el) => addInput(el));
+      // Recurse into nested shadow DOMs
+      shadow.querySelectorAll('*').forEach((el) => walkShadowDOM(el));
+    } catch {}
+  };
+  scope.querySelectorAll('*').forEach(walkShadowDOM);
 
-  // Strategy 4: ProseMirror/TipTap editors (often used in modern editors)
-  scope.querySelectorAll(
-    '.ProseMirror, .tiptap, [class*="editor-content"], [class*="Editor-content"]'
-  ).forEach((el) => {
-    const htmlEl = el as HTMLElement;
-    const rect = htmlEl.getBoundingClientRect();
-    if (rect.width > 20 && rect.height > 10 && isVisible(htmlEl)) {
-      inputs.push(htmlEl);
-    }
-  });
+  // Strategy 5: Common framework-specific classes (Element UI, Ant Design, Vuetify, etc.)
+  scope.querySelectorAll<HTMLElement>(
+    '.el-input__inner, .el-textarea__inner, .ant-input, .ant-input-affix-wrapper, ' +
+    '.v-input, .v-text-field, .MuiInputBase-root, .chakra-input, ' +
+    '[class*="input-field"], [class*="Input-field"], [class*="text-field"], [class*="TextField"]'
+  ).forEach((el) => addInput(el));
 
-  // Sort by DOM position
+  // Sort by DOM position (top-to-bottom, left-to-right within same row)
   inputs.sort((a, b) => {
-    const pos = a.compareDocumentPosition(b);
-    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-    return 0;
+    const aRect = a.getBoundingClientRect();
+    const bRect = b.getBoundingClientRect();
+    const rowDiff = Math.abs(aRect.top - bRect.top);
+    if (rowDiff < 5) {
+      // Same row: sort by left
+      return aRect.left - bRect.left;
+    }
+    return aRect.top - bRect.top;
   });
 
-  console.log(`[FormSnap] getAllRowInputs found ${inputs.length} inputs`, inputs.map((el) => ({
-    tag: el.tagName,
-    class: el.className?.toString().slice(0, 50),
-    size: `${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}`,
-  })));
+  console.log(`[FormSnap] getAllRowInputs found ${inputs.length} inputs in scope:`,
+    scope.tagName + (scope.className ? '.' + scope.className.toString().slice(0, 40) : ''),
+    inputs.map((el) => ({
+      tag: el.tagName,
+      class: (el.className?.toString() || '').slice(0, 50),
+      size: `${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}`,
+      ce: el.contentEditable,
+      tab: el.tabIndex,
+    })));
 
   return inputs;
 }
 
 /**
- * 获取弹窗内所有开关元素。
+ * 通用开关检测：通过 role="switch"、aria-checked、以及常见的开关 class。
  */
 function getAllToggles(): HTMLElement[] {
   const modals = findVisibleModals();
   const scope = modals.length > 0 ? modals[0] : document.body;
-
   const toggles: HTMLElement[] = [];
-  scope.querySelectorAll(
-    '[role="switch"], .ant-switch, .el-switch, [class*="switch"], .el-switch__core'
-  ).forEach((el) => {
-    const htmlEl = el as HTMLElement;
-    // For el-switch__core, use its parent wrapper
-    const toggleEl = el.classList.contains('el-switch__core') ? el.closest('.el-switch') as HTMLElement : htmlEl;
-    if (toggleEl && isVisible(toggleEl) && !toggles.includes(toggleEl)) toggles.push(toggleEl);
-  });
+  const seen = new WeakSet<HTMLElement>();
+
+  const addToggle = (el: HTMLElement) => {
+    if (seen.has(el)) return;
+    seen.add(el);
+    if (isVisible(el)) toggles.push(el);
+  };
+
+  // Strategy 1: Standard ARIA switches
+  scope.querySelectorAll<HTMLElement>('[role="switch"]').forEach((el) => addToggle(el));
+
+  // Strategy 2: Common switch components (Element UI, Ant Design, etc.)
+  scope.querySelectorAll<HTMLElement>(
+    '.el-switch, .ant-switch, .v-switch, .MuiSwitch-root, .chakra-switch, ' +
+    '[class*="toggle"], [class*="Toggle"]'
+  ).forEach((el) => addToggle(el));
+
+  // Strategy 3: Checkboxes that look like toggles (styled checkboxes)
+  scope.querySelectorAll<HTMLElement>(
+    'input[type="checkbox"][role="switch"]'
+  ).forEach((el) => addToggle(el.closest('.el-switch, .ant-switch') as HTMLElement || el));
+
+  // Strategy 4: Shadow DOM switches
+  const walkShadowDOM = (root: Element) => {
+    try {
+      const shadow = (root as HTMLElement).shadowRoot;
+      if (!shadow) return;
+      shadow.querySelectorAll<HTMLElement>('[role="switch"], .switch').forEach((el) => addToggle(el));
+      shadow.querySelectorAll('*').forEach((el) => walkShadowDOM(el));
+    } catch {}
+  };
+  scope.querySelectorAll('*').forEach(walkShadowDOM);
 
   console.log(`[FormSnap] getAllToggles found ${toggles.length} in scope:`,
-    scope.tagName + (scope.id ? '#' + scope.id : '') + (scope.className ? '.' + scope.className.toString().slice(0, 40) : ''));
+    scope.tagName + (scope.className ? '.' + scope.className.toString().slice(0, 40) : ''),
+    toggles.map((el) => ({
+      tag: el.tagName,
+      class: (el.className?.toString() || '').slice(0, 50),
+      aria: el.getAttribute('aria-checked') || '',
+    })));
 
   return toggles;
 }
