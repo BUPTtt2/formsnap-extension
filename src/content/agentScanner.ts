@@ -993,8 +993,15 @@ export async function fillRowByRowAgent(
 
   // For row-by-row fill, use ONLY real input/textarea elements (not contenteditable, not tabindex)
   const getRowTextInputs = (): HTMLElement[] => {
-    const modals = findVisibleModals();
-    const scope = modals.length > 0 ? modals[0] : document.body;
+    // Try to find the correct scope: el-dialog__body first, then fallback to findVisibleModals
+    let scope: HTMLElement = document.body;
+    const dialogBody = document.querySelector('.el-dialog__body') as HTMLElement | null;
+    if (dialogBody) {
+      scope = dialogBody;
+    } else {
+      const modals = findVisibleModals();
+      if (modals.length > 0) scope = modals[0];
+    }
     const inputs: HTMLElement[] = [];
     scope.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
       'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner'
@@ -1016,6 +1023,26 @@ export async function fillRowByRowAgent(
     return inputs;
   };
 
+  // Same scope logic for toggles in row-by-row fill
+  const getRowToggles = (): HTMLElement[] => {
+    let scope: HTMLElement = document.body;
+    const dialogBody = document.querySelector('.el-dialog__body') as HTMLElement | null;
+    if (dialogBody) {
+      scope = dialogBody;
+    } else {
+      const modals = findVisibleModals();
+      if (modals.length > 0) scope = modals[0];
+    }
+    const toggles: HTMLElement[] = [];
+    scope.querySelectorAll(
+      '[role="switch"], .el-switch, .ant-switch, [class*="switch"]'
+    ).forEach((el) => {
+      const htmlEl = el as HTMLElement;
+      if (isVisible(htmlEl) && !toggles.includes(htmlEl)) toggles.push(htmlEl);
+    });
+    return toggles;
+  };
+
   let prevTotalInputs = 0;
   let prevTotalToggles = 0;
 
@@ -1025,7 +1052,7 @@ export async function fillRowByRowAgent(
       // First snapshot on the very first iteration
       if (rowIdx === 0 && prevTotalInputs === 0) {
         const allInputs = getRowTextInputs();
-        const allToggles = getAllToggles();
+        const allToggles = getRowToggles();
         prevTotalInputs = allInputs.length;
         prevTotalToggles = allToggles.length;
         console.log(`[FormSnap] Row 0 initial snapshot: ${prevTotalInputs} inputs, ${prevTotalToggles} toggles`);
@@ -1074,7 +1101,7 @@ export async function fillRowByRowAgent(
 
       // Get current totals
       const currentInputs = getRowTextInputs();
-      const currentToggles = getAllToggles();
+      const currentToggles = getRowToggles();
 
       // Extract new inputs/toggles for this row
       // For Row 0: take the first INPUTS_PER_ROW inputs from current
