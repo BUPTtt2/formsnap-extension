@@ -88,7 +88,10 @@ export type MessageType =
   | 'AI_MATCH_FIELDS'
   | 'FILL_ROW_BY_ROW'
   | 'DELETE_HISTORY_ENTRY'
-  | 'DIAGNOSE_PAGE';
+  | 'DIAGNOSE_PAGE'
+  | 'START_ANCHOR_MODE'
+  | 'CANCEL_ANCHOR_MODE'
+  | 'FILL_FROM_ANCHOR';
 
 export interface ModalInfo {
   text: string;

@@ -259,6 +259,60 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'START_ANCHOR_MODE': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ success: false, error: '未找到活动标签页' });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_START_ANCHOR_MODE' }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { success: false, error: '无响应' });
+            }
+          });
+        });
+        return true;
+      }
+
+      case 'CANCEL_ANCHOR_MODE': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ success: false, error: '未找到活动标签页' });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_CANCEL_ANCHOR_MODE' }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(response || { success: false });
+            }
+          });
+        });
+        return true;
+      }
+
+      case 'FILL_FROM_ANCHOR': {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) {
+            sendResponse({ totalRows: 0, filledRows: 0, errors: ['未找到活动标签页'] });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_FILL_FROM_ANCHOR', payload: message.payload }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ totalRows: 0, filledRows: 0, errors: [chrome.runtime.lastError.message] });
+            } else {
+              sendResponse(response || { totalRows: 0, filledRows: 0, errors: ['无响应'] });
+            }
+          });
+        });
+        return true;
+      }
+
       case 'AI_MATCH_FIELDS': {
         // AI-powered matching: use user-provided target screenshots
         if (!message.payload || !message.payload.parsedFields || !message.payload.formFields) {

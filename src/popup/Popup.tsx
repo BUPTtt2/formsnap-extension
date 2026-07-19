@@ -874,7 +874,7 @@ export default function Popup() {
     setShowManualAdd(false);
   };
 
-  // Agent 逐行填写：直接在小建工等页面上逐行新增+填写
+  // Agent 逐行填写：先锚定输入框，再从锚定点逐行填写
   const handleRowByRowFill = useCallback(async () => {
     // Check if data has row-grouped format (e.g. "1.名称", "2.名称")
     const groups: Record<string, ParsedField[]> = {};
@@ -891,36 +891,52 @@ export default function Popup() {
       return;
     }
 
+    const dataRows = rowKeys.map((key) =>
+      groups[key].map((f) => ({
+        colName: f.field.replace(/^\d+\./, ''),
+        value: f.value,
+        type: f.type,
+      }))
+    );
+
+    // Inject content script first (ensure agentScanner is loaded)
+    const tab = await getCurrentTab();
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id! },
+        files: ['content.js'],
+      });
+      await new Promise((r) => setTimeout(r, 800));
+    } catch (injectErr: any) {
+      throw new Error('无法注入脚本到目标页面: ' + injectErr.message);
+    }
+
+    // Step 1: 进入锚定模式，等待用户点击第一个输入框
     setLoading(true);
     setStep('filling');
-    setStatus({ type: 'loading', text: `Agent 正在逐行填写（共 ${rowKeys.length} 行）...` });
-    setAgentProgress({ current: 0, total: rowKeys.length });
+    setStatus({ type: 'info', text: '请在目标页面点击第一个要填写的输入框...' });
+
+    const anchorResult = await sendMessage<{ success: boolean; anchor?: any; reason?: string }>(
+      'START_ANCHOR_MODE',
+      {}
+    );
+
+    if (!anchorResult || !anchorResult.success) {
+      setLoading(false);
+      setStep('data-review');
+      setStatus({ type: 'error', text: anchorResult?.reason || '锚定取消或失败' });
+      return;
+    }
+
+    const anchorInfo = anchorResult.anchor;
+    setStatus({ type: 'info', text: `已锚定到 <${anchorInfo.tag}>，开始填写...` });
+    setAgentProgress({ current: 0, total: dataRows.length });
 
     try {
-      const dataRows = rowKeys.map((key) =>
-        groups[key].map((f) => ({
-          colName: f.field.replace(/^\d+\./, ''),
-          value: f.value,
-          type: f.type,
-        }))
-      );
-
-      // Inject content script first (ensure agentScanner is loaded)
-      const tab = await getCurrentTab();
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id! },
-          files: ['content.js'],
-        });
-        await new Promise((r) => setTimeout(r, 800));
-      } catch (injectErr: any) {
-        throw new Error('无法注入脚本到目标页面: ' + injectErr.message);
-      }
-
-      // Send fill message
+      // Step 2: 从锚定点开始填写
       const result = await sendMessage<{ totalRows: number; filledRows: number; errors: string[] }>(
-        'FILL_ROW_BY_ROW',
-        { dataRows }
+        'FILL_FROM_ANCHOR',
+        { anchorInfo, dataRows }
       );
 
       setAgentProgress(null);
@@ -1466,7 +1482,7 @@ export default function Popup() {
                 点击"+ 新增" → 填写名称/描述/默认值 → 设置开关 → 重复下一行
               </div>
               <div style={{ marginBottom: 8, padding: '6px 10px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 6, fontSize: 11, color: '#b45309' }}>
-                请确保目标页面的变量编辑弹窗已打开，且当前行为空行
+                请确保目标页面的变量编辑弹窗已打开，且当前行为空行。点击后将进入锚定模式，请在页面上点击第一个输入框。
               </div>
               <button
                 className="btn btn-primary"
@@ -1474,7 +1490,7 @@ export default function Popup() {
                 disabled={loading}
                 style={{ width: '100%', borderColor: '#8b5cf6', background: '#7c3aed' }}
               >
-                开始逐行填写（Agent 自动操作）
+                锚定并逐行填写（点击输入框定位）
               </button>
             </div>
           )}

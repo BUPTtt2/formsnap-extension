@@ -1473,6 +1473,462 @@ function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles:
   return result;
 }
 
+// ========================== 7. 锚定模式 + fillFromAnchor 引擎 ==========================
+
+/** 锚定元素信息（序列化，不依赖 DOM 引用） */
+export interface AnchorElementInfo {
+  tag: string;
+  className: string;
+  id: string;
+  rect: { top: number; left: number; width: number; height: number; bottom: number; right: number };
+  selector: string;
+  isContentEditable: boolean;
+  inputType: string;
+  placeholder: string;
+  name: string;
+}
+
+/** DOM 级别的遮罩 / 锚定状态 */
+let anchorOverlay: HTMLDivElement | null = null;
+let anchorHighlightEl: HTMLElement | null = null;
+let anchorClickListener: ((e: MouseEvent) => void) | null = null;
+let anchorCancelKeyListener: ((e: KeyboardEvent) => void) | null = null;
+
+/**
+ * 进入锚定模式：添加半透明遮罩 + 提示，监听用户点击输入框。
+ * 使用 document 级别的 mousedown 事件，遮罩设置 pointer-events: none。
+ */
+function enterAnchorMode(sendResponse: (response: any) => void): boolean {
+  // 如果已在锚定模式，先退出
+  exitAnchorMode();
+
+  // 创建遮罩
+  const overlay = document.createElement('div');
+  overlay.id = 'formsnap-anchor-overlay';
+  Object.assign(overlay.style, {
+    position: 'fixed',
+    top: '0',
+    left: '0',
+    width: '100vw',
+    height: '100vh',
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    zIndex: '2147483646',
+    pointerEvents: 'none',
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    paddingTop: '80px',
+  });
+
+  // 提示文字
+  const hint = document.createElement('div');
+  Object.assign(hint.style, {
+    background: 'rgba(59, 130, 246, 0.95)',
+    color: '#fff',
+    padding: '12px 24px',
+    borderRadius: '8px',
+    fontSize: '16px',
+    fontWeight: '600',
+    pointerEvents: 'none',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  });
+  hint.textContent = '请点击第一个要填写的输入框（Esc 取消）';
+  overlay.appendChild(hint);
+  document.body.appendChild(overlay);
+  anchorOverlay = overlay;
+
+  // 监听 mousedown 事件（document 级别，不受遮罩影响）
+  const clickHandler = (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target) return;
+
+    // 判断是否为可交互输入元素
+    const isInput = target.matches('input, textarea') ||
+      target.isContentEditable ||
+      target.matches('[role="textbox"]');
+    // 也检查父级（如 .el-input wrapper 被点击的情况）
+    const parentInput = target.closest('input, textarea, [contenteditable="true"], [contenteditable=""], .el-input, .ant-input, [role="textbox"]') as HTMLElement | null;
+
+    const el = isInput ? target : parentInput;
+    if (!el) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // 记录锚定元素信息
+    const info = extractAnchorInfo(el);
+
+    // 高亮闪烁
+    highlightElement(el);
+
+    // 退出锚定模式
+    exitAnchorMode();
+
+    sendResponse({ success: true, anchor: info });
+  };
+
+  // Esc 取消
+  const cancelHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitAnchorMode();
+      sendResponse({ success: false, reason: '用户取消' });
+    }
+  };
+
+  document.addEventListener('mousedown', clickHandler, true);
+  document.addEventListener('keydown', cancelHandler, true);
+  anchorClickListener = clickHandler;
+  anchorCancelKeyListener = cancelHandler;
+
+  // 不会立即返回，需要异步响应
+  return true;
+}
+
+/**
+ * 退出锚定模式：移除遮罩和事件监听。
+ */
+function exitAnchorMode(): void {
+  if (anchorClickListener) {
+    document.removeEventListener('mousedown', anchorClickListener, true);
+    anchorClickListener = null;
+  }
+  if (anchorCancelKeyListener) {
+    document.removeEventListener('keydown', anchorCancelKeyListener, true);
+    anchorCancelKeyListener = null;
+  }
+  if (anchorOverlay) {
+    anchorOverlay.remove();
+    anchorOverlay = null;
+  }
+  if (anchorHighlightEl) {
+    anchorHighlightEl.remove();
+    anchorHighlightEl = null;
+  }
+}
+
+/**
+ * 提取锚定元素的序列化信息。
+ */
+function extractAnchorInfo(el: HTMLElement): AnchorElementInfo {
+  const rect = el.getBoundingClientRect();
+  // 如果是 wrapper，取内部 input 的信息
+  const innerInput = el.querySelector('input, textarea') as HTMLInputElement | HTMLTextAreaElement | null;
+  const actualEl = (el.matches('input, textarea') ? el : innerInput) as HTMLInputElement | HTMLTextAreaElement | null;
+
+  return {
+    tag: el.tagName.toLowerCase(),
+    className: (el.className?.toString() || '').slice(0, 200),
+    id: el.id || '',
+    rect: {
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+      bottom: rect.bottom,
+      right: rect.right,
+    },
+    selector: buildSelector(el),
+    isContentEditable: el.isContentEditable,
+    inputType: actualEl?.type || '',
+    placeholder: actualEl?.placeholder || '',
+    name: actualEl?.name || '',
+  };
+}
+
+/**
+ * 高亮元素：添加蓝色边框闪烁效果。
+ */
+function highlightElement(el: HTMLElement): void {
+  const highlight = document.createElement('div');
+  const rect = el.getBoundingClientRect();
+  Object.assign(highlight.style, {
+    position: 'fixed',
+    top: `${rect.top - 3}px`,
+    left: `${rect.left - 3}px`,
+    width: `${rect.width + 6}px`,
+    height: `${rect.height + 6}px`,
+    border: '3px solid #3b82f6',
+    borderRadius: '4px',
+    zIndex: '2147483647',
+    pointerEvents: 'none',
+    boxShadow: '0 0 12px rgba(59, 130, 246, 0.6)',
+    transition: 'opacity 0.3s',
+  });
+  document.body.appendChild(highlight);
+  anchorHighlightEl = highlight;
+
+  // 2 秒后自动移除
+  setTimeout(() => {
+    highlight.style.opacity = '0';
+    setTimeout(() => highlight.remove(), 300);
+  }, 2000);
+}
+
+/**
+ * 从锚定点开始的逐行填写引擎。
+ *
+ * 流程：
+ * 1. 根据 anchorInfo 的位置信息，重新定位锚定元素
+ * 2. 找到同行（Y 坐标差 < 10px）的所有可交互元素，按从左到右排列
+ * 3. 填写第一行数据
+ * 4. 找到并点击"+ 新增"按钮
+ * 5. 等待新行渲染，通过 Y 坐标递增定位新行
+ * 6. 循环直到所有 dataRows 填完
+ */
+export async function fillFromAnchor(
+  anchorInfo: AnchorElementInfo,
+  dataRows: { colName: string; value: string; type: string }[][]
+): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
+  const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
+
+  // 1. 重新定位锚定元素
+  let anchorEl = relocateAnchorElement(anchorInfo);
+  if (!anchorEl) {
+    result.errors.push('无法重新定位锚定元素，请重试');
+    return result;
+  }
+
+  // 记录锚定 Y 坐标作为基准
+  const anchorRect = anchorEl.getBoundingClientRect();
+  let lastAnchorY = anchorRect.top;
+  console.log(`[FormSnap] fillFromAnchor: anchor at Y=${Math.round(lastAnchorY)}, ${dataRows.length} rows to fill`);
+
+  for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
+    const rowData = dataRows[rowIdx];
+    try {
+      // 2. 重新定位当前行首元素
+      if (rowIdx > 0) {
+        // 点击"+ 新增"按钮
+        const added = await findAndClickAddButton(anchorEl!);
+        if (!added) {
+          result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
+          break;
+        }
+        await delay(1500); // 等待新行渲染
+
+        // 重新定位锚定元素（DOM 可能已更新）
+        anchorEl = relocateAnchorElement(anchorInfo);
+        // 如果重新定位失败，用 Y 坐标递增策略找新行首元素
+        if (!anchorEl) {
+          anchorEl = findElementBelowY(lastAnchorY);
+          if (!anchorEl) {
+            result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框`);
+            break;
+          }
+        }
+      }
+
+      if (!anchorEl) {
+        result.errors.push(`第 ${rowIdx + 1} 行：锚定元素丢失`);
+        break;
+      }
+
+      const currentRect = anchorEl.getBoundingClientRect();
+      lastAnchorY = currentRect.top;
+
+      // 3. 找到同行所有可交互元素
+      const rowElements = findRowElements(currentRect);
+      if (rowElements.length === 0) {
+        result.errors.push(`第 ${rowIdx + 1} 行：同行未找到可交互元素`);
+        continue;
+      }
+
+      console.log(`[FormSnap] Row ${rowIdx}: anchor Y=${Math.round(lastAnchorY)}, found ${rowElements.length} interactive elements`);
+
+      // 4. 依次填写
+      let inputIdx = 0;
+      let toggleIdx = 0;
+      let rowFilled = 0;
+
+      for (const field of rowData) {
+        if (field.type === 'checkbox' || field.type === 'toggle') {
+          // 在同行找 switch 元素
+          const toggleEl = rowElements.filter((e) => e.type === 'toggle')[toggleIdx];
+          if (toggleEl) {
+            fillToggle(toggleEl.element, field.value);
+            rowFilled++;
+            toggleIdx++;
+            await delay(150);
+          } else {
+            result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到开关`);
+          }
+          continue;
+        }
+
+        // 找文本输入元素
+        const textEl = rowElements.filter((e) => e.type !== 'toggle')[inputIdx];
+        if (textEl) {
+          setNativeValueDirect(textEl.element, field.value);
+          rowFilled++;
+          inputIdx++;
+          await delay(200);
+        } else {
+          result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到输入框`);
+        }
+      }
+
+      if (rowFilled > 0) result.filledRows++;
+      await delay(300);
+    } catch (err) {
+      result.errors.push(`第 ${rowIdx + 1} 行出错: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 重新定位锚定元素。
+ * 策略：先用 selector，再用位置 + 特征匹配。
+ */
+function relocateAnchorElement(info: AnchorElementInfo): HTMLElement | null {
+  // 策略 1：用 CSS selector
+  if (info.selector) {
+    try {
+      const el = document.querySelector(info.selector) as HTMLElement | null;
+      if (el && isVisible(el)) {
+        const rect = el.getBoundingClientRect();
+        // 验证位置是否与锚定记录接近（允许 50px 偏移，因为可能滚动）
+        const posMatch = Math.abs(rect.top - info.rect.top) < 50 &&
+          Math.abs(rect.left - info.rect.left) < 50;
+        if (posMatch) return el;
+      }
+    } catch {}
+  }
+
+  // 策略 2：用位置 + 特征匹配
+  const candidates = document.querySelectorAll(
+    `${info.tag}${info.id ? '#' + CSS.escape(info.id) : ''}, ` +
+    `${info.tag}${info.className ? '.' + info.className.split(/\s+/).filter(Boolean).map(c => CSS.escape(c)).join('.') : ''}`
+  );
+  for (const el of Array.from(candidates)) {
+    const htmlEl = el as HTMLElement;
+    if (!isVisible(htmlEl)) continue;
+    const rect = htmlEl.getBoundingClientRect();
+    if (Math.abs(rect.top - info.rect.top) < 30 &&
+        Math.abs(rect.left - info.rect.left) < 30 &&
+        Math.abs(rect.width - info.rect.width) < 30 &&
+        Math.abs(rect.height - info.rect.height) < 30) {
+      return htmlEl;
+    }
+  }
+
+  // 策略 3：纯位置匹配（Y 坐标 + X 坐标）
+  const allInputs = getAllRowInputs();
+  for (const el of allInputs) {
+    const rect = el.getBoundingClientRect();
+    if (Math.abs(rect.top - info.rect.top) < 20 &&
+        Math.abs(rect.left - info.rect.left) < 20) {
+      return el;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 找到同行（Y 坐标差 < 10px）的所有可交互元素，按从左到右排列。
+ */
+function findRowElements(anchorRect: DOMRect): { element: HTMLElement; type: 'input' | 'toggle' }[] {
+  const elements: { element: HTMLElement; type: 'input' | 'toggle'; left: number }[] = [];
+  const Y_THRESHOLD = 10;
+
+  // 收集文本输入元素
+  const allInputs = getAllRowInputs();
+  for (const el of allInputs) {
+    const rect = el.getBoundingClientRect();
+    if (Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
+      elements.push({ element: el, type: 'input', left: rect.left });
+    }
+  }
+
+  // 收集开关元素
+  const allToggles = getAllToggles();
+  for (const el of allToggles) {
+    const rect = el.getBoundingClientRect();
+    if (Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
+      elements.push({ element: el, type: 'toggle', left: rect.left });
+    }
+  }
+
+  // 按从左到右排序
+  elements.sort((a, b) => a.left - b.left);
+  return elements.map(({ element, type }) => ({ element, type }));
+}
+
+/**
+ * 在锚定元素附近查找并点击"+ 新增"按钮。
+ */
+async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
+  // 先在锚定元素的上方/同行区域查找
+  const anchorRect = anchorEl.getBoundingClientRect();
+  const searchRegion = anchorRect.top - 200; // 往上搜索 200px
+
+  // 查找所有包含"新增"文字的按钮
+  const keywords = ['新增', '添加', '新建', '添加行', '+ 新增', '+ 新建'];
+  const buttons = document.querySelectorAll(
+    'button, [role="button"], a, span, div'
+  );
+
+  // 收集匹配的按钮，按距离锚定元素上方的远近排序
+  const matched: { el: HTMLElement; dist: number }[] = [];
+  for (const btn of Array.from(buttons)) {
+    const el = btn as HTMLElement;
+    if (!isVisible(el)) continue;
+
+    const text = (el.textContent || '').trim();
+    const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+    const title = (el.getAttribute('title') || '').trim();
+    const combined = `${text} ${ariaLabel} ${title}`;
+
+    for (const kw of keywords) {
+      if (combined.includes(kw)) {
+        const rect = el.getBoundingClientRect();
+        const dist = Math.abs(rect.top - searchRegion);
+        matched.push({ el, dist });
+        break;
+      }
+    }
+  }
+
+  // 按距离排序，优先选择锚定元素上方的按钮
+  matched.sort((a, b) => a.dist - b.dist);
+
+  if (matched.length > 0) {
+    const btn = matched[0].el;
+    btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await delay(300);
+    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    btn.click();
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * 通过 Y 坐标递增查找锚定点下方新出现的输入元素。
+ */
+function findElementBelowY(referenceY: number): HTMLElement | null {
+  const allInputs = getAllRowInputs();
+  // 找到 Y 坐标刚好大于 referenceY 的第一个输入框
+  let best: HTMLElement | null = null;
+  let bestY = Infinity;
+
+  for (const el of allInputs) {
+    const rect = el.getBoundingClientRect();
+    if (rect.top > referenceY + 5 && rect.top < bestY) {
+      best = el;
+      bestY = rect.top;
+    }
+  }
+
+  return best;
+}
+
 /**
  * 常量：消息类型枚举
  */
@@ -1484,6 +1940,9 @@ export const AGENT_MESSAGE_TYPES = {
   EXEC_FILL_TABLE_MULTI_ROW: 'EXEC_FILL_TABLE_MULTI_ROW',
   EXEC_FILL_ROW_BY_ROW: 'EXEC_FILL_ROW_BY_ROW',
   EXEC_DIAGNOSE: 'EXEC_DIAGNOSE',
+  EXEC_START_ANCHOR_MODE: 'EXEC_START_ANCHOR_MODE',
+  EXEC_CANCEL_ANCHOR_MODE: 'EXEC_CANCEL_ANCHOR_MODE',
+  EXEC_FILL_FROM_ANCHOR: 'EXEC_FILL_FROM_ANCHOR',
 } as const;
 
 chrome.runtime.onMessage.addListener(
@@ -1542,6 +2001,26 @@ chrome.runtime.onMessage.addListener(
           const diagResult = diagnosePageStructure();
           console.log('[FormSnap] Diagnose result:', diagResult);
           sendResponse(diagResult);
+          return true;
+        }
+
+        case AGENT_MESSAGE_TYPES.EXEC_START_ANCHOR_MODE: {
+          // 锚定模式：异步等待用户点击，通过 sendResponse 返回
+          return enterAnchorMode(sendResponse);
+        }
+
+        case AGENT_MESSAGE_TYPES.EXEC_CANCEL_ANCHOR_MODE: {
+          exitAnchorMode();
+          sendResponse({ success: true });
+          return false;
+        }
+
+        case AGENT_MESSAGE_TYPES.EXEC_FILL_FROM_ANCHOR: {
+          const { anchorInfo, dataRows } = message.payload as {
+            anchorInfo: AnchorElementInfo;
+            dataRows: { colName: string; value: string; type: string }[][];
+          };
+          fillFromAnchor(anchorInfo, dataRows).then(sendResponse);
           return true;
         }
 
