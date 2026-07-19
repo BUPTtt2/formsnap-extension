@@ -970,9 +970,102 @@ export async function fillRowByRowAgent(
 ): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
   const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
 
-  // Snapshot current input count before we start
-  let prevInputCount = 0;
-  let prevToggleCount = 0;
+  // Find all existing variable rows in the dialog
+  const getExistingRows = (): HTMLElement[] => {
+    const modals = findVisibleModals();
+    const scope = modals.length > 0 ? modals[0] : document.body;
+    // Look for variable row containers (Element UI table rows, card items, form items)
+    const rowSelectors = [
+      '.el-table__row', '.el-table__body-wrapper tr',
+      '.el-form-item', '.el-row',
+      '[class*="var-item"]', '[class*="var_row"]', '[class*="variable-row"]',
+      '[class*="card-item"]',
+    ];
+    const rows: HTMLElement[] = [];
+    for (const sel of rowSelectors) {
+      try {
+        scope.querySelectorAll(sel).forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          if (isVisible(htmlEl) && !rows.includes(htmlEl)) {
+            rows.push(htmlEl);
+          }
+        });
+      } catch {}
+    }
+    // If no rows found with selectors, try a different strategy: find rows by visual grouping
+    if (rows.length === 0) {
+      // Group input elements by their Y position (rows on the same Y coordinate belong to the same row)
+      const allInputs = getAllRowInputs();
+      const rowMap = new Map<number, HTMLElement[]>();
+      allInputs.forEach((input) => {
+        const rect = input.getBoundingClientRect();
+        const yKey = Math.round(rect.top / 10); // Group by 10px bands
+        if (!rowMap.has(yKey)) rowMap.set(yKey, []);
+        rowMap.get(yKey)!.push(input);
+      });
+      // Each group is a "row"
+      const sortedKeys = Array.from(rowMap.keys()).sort();
+      sortedKeys.forEach((key) => {
+        const group = rowMap.get(key)!;
+        // Find common parent for this group
+        const parent = group[0].closest('.el-collapse-item__content, .el-dialog__body, .card-item, form, [class*="body"]') as HTMLElement | null;
+        if (parent && !rows.includes(parent)) rows.push(parent);
+      });
+    }
+    return rows;
+  };
+
+  const getRowInputs = (rowEl: HTMLElement): { inputs: HTMLElement[]; toggles: HTMLElement[] } => {
+    const inputs: HTMLElement[] = [];
+    const toggles: HTMLElement[] = [];
+    const seen = new WeakSet<HTMLElement>();
+
+    const addInput = (el: HTMLElement) => {
+      if (seen.has(el)) return;
+      seen.add(el);
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 10 || rect.height < 5) return;
+      if (!isVisible(el)) return;
+      inputs.push(el);
+    };
+
+    rowEl.querySelectorAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]):not([type="file"]), textarea, [contenteditable="true"], .el-input, .ant-input'
+    ).forEach((el) => addInput(el as HTMLElement));
+
+    rowEl.querySelectorAll('[tabindex]').forEach((el) => {
+      const htmlEl = el as HTMLElement;
+      const style = window.getComputedStyle(htmlEl);
+      if ((style.cursor === 'text' || style.cursor === 'auto') && !htmlEl.matches('input, textarea, select, [contenteditable]')) {
+        const rect = htmlEl.getBoundingClientRect();
+        if (rect.width > 30 && rect.width < 800 && rect.height > 15 && rect.height < 200) {
+          addInput(htmlEl);
+        }
+      }
+    });
+
+    rowEl.querySelectorAll(
+      '[role="switch"], .el-switch, .ant-switch, [class*="switch"]'
+    ).forEach((el) => {
+      const htmlEl = el as HTMLElement;
+      if (!seen.has(htmlEl) && isVisible(htmlEl)) {
+        seen.add(htmlEl);
+        toggles.push(htmlEl);
+      }
+    });
+
+    // Sort inputs by position
+    inputs.sort((a, b) => {
+      const aR = a.getBoundingClientRect();
+      const bR = b.getBoundingClientRect();
+      return Math.abs(aR.top - bR.top) < 5 ? aR.left - bR.left : aR.top - bR.top;
+    });
+
+    return { inputs, toggles };
+  };
+
+  let existingRows = getExistingRows();
+  console.log(`[FormSnap] fillRowByRow: found ${existingRows.length} existing rows, need to fill ${dataRows.length} rows`);
 
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
     const rowData = dataRows[rowIdx];
@@ -980,53 +1073,39 @@ export async function fillRowByRowAgent(
       if (rowIdx > 0) {
         // Click "+ 新增" button
         let added = false;
-        if (addButtonSelector) {
-          const btn = document.querySelector(addButtonSelector) as HTMLElement | null;
-          if (btn) {
-            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const addButtons = document.querySelectorAll(
+          'button, a, span, div[role="button"], [class*="add"], [class*="Add"], [class*="new"], [class*="New"]'
+        );
+        for (const btn of Array.from(addButtons)) {
+          const el = btn as HTMLElement;
+          const text = el.textContent?.trim() || '';
+          if (text.match(/^[+＋]\s*新增|^新增|^[+＋]\s*Add|^Add|^添加|^创建/)) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
             await delay(300);
-            btn.click();
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            el.click();
             added = true;
-          }
-        }
-        if (!added) {
-          const addButtons = document.querySelectorAll(
-            'button, a, span, div[role="button"], [class*="add"], [class*="Add"], [class*="new"], [class*="New"]'
-          );
-          for (const btn of Array.from(addButtons)) {
-            const el = btn as HTMLElement;
-            const text = el.textContent?.trim() || '';
-            if (text.match(/^[+＋]\s*新增|^新增|^[+＋]\s*Add|^Add|^添加|^创建/)) {
-              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              await delay(300);
-              el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-              el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-              el.click();
-              added = true;
-              break;
-            }
+            break;
           }
         }
         if (!added) {
           result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
           continue;
         }
-        // Wait for new row to render
-        await delay(1000);
-      } else {
-          // First row: snapshot current counts (this row already exists)
-          const allInputs = getAllRowInputs();
-          const allToggles = getAllToggles();
-          prevInputCount = allInputs.length;
-          prevToggleCount = allToggles.length;
-          console.log(`[FormSnap] Row 0: ${prevInputCount} inputs, ${prevToggleCount} toggles`);
-        }
+        await delay(1500); // Wait for new row to fully render
+        existingRows = getExistingRows(); // Re-scan rows
+      }
 
-      // Scan inputs: only get the NEW ones (after prevInputCount)
-      const allInputsNow = getAllRowInputs();
-      const newInputs = allInputsNow.slice(prevInputCount);
-      const newToggleCount = getAllToggles().length;
-      // For toggles: use the last N toggles that appeared after the previous row
+      // Find the target row (last row or the rowIdx-th row)
+      const targetRow = existingRows[Math.min(rowIdx, existingRows.length - 1)];
+      if (!targetRow) {
+        result.errors.push(`第 ${rowIdx + 1} 行：找不到目标行容器`);
+        continue;
+      }
+
+      const { inputs, toggles } = getRowInputs(targetRow);
+      console.log(`[FormSnap] Row ${rowIdx}: ${inputs.length} inputs, ${toggles.length} toggles in row container`);
 
       let rowFilled = 0;
       let inputIdx = 0;
@@ -1034,10 +1113,8 @@ export async function fillRowByRowAgent(
 
       for (const field of rowData) {
         if (field.type === 'checkbox' || field.type === 'toggle') {
-          const allTogglesNow = getAllToggles();
-          if (toggleIdx < allTogglesNow.length - prevToggleCount) {
-            const toggleEl = allTogglesNow[prevToggleCount + toggleIdx];
-            fillToggle(toggleEl, field.value);
+          if (toggleIdx < toggles.length) {
+            fillToggle(toggles[toggleIdx], field.value);
             rowFilled++;
             toggleIdx++;
             await delay(100);
@@ -1045,25 +1122,19 @@ export async function fillRowByRowAgent(
           continue;
         }
 
-        if (inputIdx < newInputs.length) {
-          const inputEl = newInputs[inputIdx];
-          setNativeValue(inputEl, field.value);
-          // Ensure React picks up the change even for empty values
-          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-          inputEl.dispatchEvent(new Event('change', { bubbles: true }));
-          (inputEl as HTMLInputElement)?.focus?.();
-          console.log(`[FormSnap] Fill: "${field.colName}" = "${field.value}" into`, inputEl);
+        if (inputIdx < inputs.length) {
+          setNativeValue(inputs[inputIdx], field.value);
+          inputs[inputIdx].dispatchEvent(new Event('input', { bubbles: true }));
+          inputs[inputIdx].dispatchEvent(new Event('change', { bubbles: true }));
+          (inputs[inputIdx] as HTMLInputElement)?.focus?.();
+          console.log(`[FormSnap] Fill: "${field.colName}" = "${field.value}" into`, inputs[inputIdx]);
           rowFilled++;
           inputIdx++;
           await delay(150);
         } else {
-          result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框`);
+          result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框 (found ${inputs.length})`);
         }
       }
-
-      // Update prev counts for next iteration
-      prevInputCount = allInputsNow.length;
-      prevToggleCount = getAllToggles().length;
 
       if (rowFilled > 0) result.filledRows++;
       await delay(200);

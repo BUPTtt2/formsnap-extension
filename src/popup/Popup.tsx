@@ -975,9 +975,22 @@ export default function Popup() {
   const handleRestoreHistory = useCallback((entry: { key: string; data: any }) => {
     if (entry.data.parsedFields) {
       setParsedFields(entry.data.parsedFields);
-      setStep(entry.data.step === 'data-review' ? 'data-review' : 'input');
+      // Restore text content and images if available
+      if (entry.data.textContent) {
+        setTextContent(entry.data.textContent);
+        setInputMode('text');
+      }
+      if (entry.data.imageCount && entry.data.imageCount > 0) {
+        setInputMode('image');
+        // Note: image base64 data is too large to store in history, but we keep the count
+      }
+      // Always go to data-review page (so user can see and edit parsed fields)
+      setStep('data-review');
       setShowHistory(false);
-      setStatus({ type: 'success', text: '已恢复历史记录' });
+      setFormFields([]);
+      setMappings([]);
+      setFillResult(null);
+      setStatus({ type: 'success', text: `已恢复历史记录（${entry.data.parsedFields.length} 个字段）` });
     }
   }, []);
 
@@ -986,7 +999,7 @@ export default function Popup() {
     const label = prompt('请输入保存名称（可选）：') || `手动保存 ${slot + 1}`;
     await sendMessage('SAVE_MAPPING_HISTORY', {
       type: 'manual', slot, label,
-      data: { parsedFields, textContent, step },
+      data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review' },
     });
     setStatus({ type: 'success', text: `已保存到手动槽位 ${slot + 1}` });
   }, [parsedFields, textContent]);
@@ -997,7 +1010,7 @@ export default function Popup() {
       sendMessage('SAVE_MAPPING_HISTORY', {
         type: 'auto',
         label: `${parsedFields.length} 个字段`,
-        data: { parsedFields, textContent },
+        data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review' },
       }).catch(() => {});
     }
   }, [step]);
