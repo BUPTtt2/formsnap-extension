@@ -1011,7 +1011,7 @@ export async function fillRowByRowAgent(
       if (rect.width > 10 && rect.height > 5 && isVisible(htmlEl)) {
         // For wrapper elements (.el-input, .ant-input), check if they contain an inner input
         // If so, use the inner input instead of the wrapper
-        const innerInput = el.querySelector('input, textarea');
+        const innerInput = el.querySelector('input, textarea') as HTMLElement | null;
         if (innerInput && !el.matches('input, textarea')) {
           const innerRect = innerInput.getBoundingClientRect();
           if (innerRect.width > 10) {
@@ -1733,7 +1733,7 @@ export async function fillFromAnchor(
       lastAnchorY = currentRect.top;
 
       // 3. 找到同行所有可交互元素
-      const rowElements = findRowElements(currentRect);
+      const rowElements = findRowElements(currentRect, anchorEl);
       if (rowElements.length === 0) {
         result.errors.push(`第 ${rowIdx + 1} 行：同行未找到可交互元素`);
         continue;
@@ -1835,30 +1835,90 @@ function relocateAnchorElement(info: AnchorElementInfo): HTMLElement | null {
 /**
  * 找到同行（Y 坐标差 < 10px）的所有可交互元素，按从左到右排列。
  */
-function findRowElements(anchorRect: DOMRect): { element: HTMLElement; type: 'input' | 'toggle' }[] {
+function findRowElements(anchorRect: DOMRect, anchorEl?: HTMLElement): { element: HTMLElement; type: 'input' | 'toggle' }[] {
   const elements: { element: HTMLElement; type: 'input' | 'toggle'; left: number }[] = [];
-  const Y_THRESHOLD = 10;
+  const Y_THRESHOLD = 15; // More generous: 15px
 
-  // 收集文本输入元素
-  const allInputs = getAllRowInputs();
-  for (const el of allInputs) {
-    const rect = el.getBoundingClientRect();
-    if (Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
-      elements.push({ element: el, type: 'input', left: rect.left });
+  // Strategy: search from anchor element's parent containers outward
+  // Start with the closest form-like parent, then expand to the dialog body, then full page
+  const scopes: HTMLElement[] = [];
+
+  if (anchorEl) {
+    // Walk up parents and collect progressively larger scopes
+    let parent = anchorEl.parentElement;
+    for (let i = 0; i < 10 && parent; i++) {
+      scopes.push(parent);
+      parent = parent.parentElement;
     }
   }
 
-  // 收集开关元素
-  const allToggles = getAllToggles();
-  for (const el of allToggles) {
-    const rect = el.getBoundingClientRect();
-    if (Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
-      elements.push({ element: el, type: 'toggle', left: rect.left });
-    }
+  // Add dialog body if available
+  const dialogBody = document.querySelector('.el-dialog__body') as HTMLElement | null;
+  if (dialogBody && !scopes.includes(dialogBody)) scopes.push(dialogBody);
+
+  // Add visible modals
+  const modals = findVisibleModals();
+  for (const modal of modals) {
+    if (!scopes.includes(modal)) scopes.push(modal);
   }
 
-  // 按从左到右排序
+  // Fall back to body
+  if (!scopes.includes(document.body)) scopes.push(document.body);
+
+  const seen = new WeakSet<HTMLElement>();
+
+  // For each scope (from most specific to least), collect row elements
+  for (const scope of scopes) {
+    // Collect text inputs
+    scope.querySelectorAll<HTMLElement>(
+      'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner, [contenteditable="true"], [role="textbox"]'
+    ).forEach((el) => {
+      if (seen.has(el)) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 10 && rect.height > 5 && Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
+        seen.add(el);
+        elements.push({ element: el, type: 'input', left: rect.left });
+      }
+    });
+
+    // Also check .el-input wrappers that contain inner inputs
+    scope.querySelectorAll<HTMLElement>('.el-input, .ant-input').forEach((el) => {
+      if (seen.has(el)) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 10 && rect.height > 5 && Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
+        const innerInput = el.querySelector('input, textarea') as HTMLElement | null;
+        if (innerInput && !seen.has(innerInput)) {
+          seen.add(el);
+          seen.add(innerInput as HTMLElement);
+          elements.push({ element: innerInput as HTMLElement, type: 'input', left: rect.left });
+        }
+      }
+    });
+
+    // Collect toggles
+    scope.querySelectorAll<HTMLElement>(
+      '[role="switch"], .el-switch, .ant-switch, [class*="switch"]'
+    ).forEach((el) => {
+      if (seen.has(el)) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 10 && rect.height > 5 && Math.abs(rect.top - anchorRect.top) < Y_THRESHOLD) {
+        seen.add(el);
+        elements.push({ element: el, type: 'toggle', left: rect.left });
+      }
+    });
+
+    // If we found enough elements (at least 2 inputs + 1 toggle), stop expanding
+    const inputCount = elements.filter(e => e.type === 'input').length;
+    const toggleCount = elements.filter(e => e.type === 'toggle').length;
+    if (inputCount >= 2 || toggleCount >= 1) break;
+  }
+
+  // Sort by X position (left to right)
   elements.sort((a, b) => a.left - b.left);
+
+  console.log(`[FormSnap] findRowElements: ${elements.length} elements at Y≈${Math.round(anchorRect.top)}`,
+    elements.map((e, i) => `#${i} ${e.type} <${e.element.tagName} class="${(e.element.className?.toString() || '').slice(0, 30)}" left=${Math.round(e.left)}`));
+
   return elements.map(({ element, type }) => ({ element, type }));
 }
 
@@ -1917,7 +1977,19 @@ async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
  * 通过 Y 坐标递增查找锚定点下方新出现的输入元素。
  */
 function findElementBelowY(referenceY: number): HTMLElement | null {
-  const allInputs = getAllRowInputs();
+  // Use broad search: find all inputs in page
+  const allInputs: HTMLElement[] = [];
+  const seen = new WeakSet<HTMLElement>();
+
+  document.querySelectorAll<HTMLElement>(
+    'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner, [contenteditable="true"], .el-input input'
+  ).forEach((el) => {
+    if (seen.has(el)) return;
+    seen.add(el);
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 10 && rect.height > 5) allInputs.push(el);
+  });
+
   // 找到 Y 坐标刚好大于 referenceY 的第一个输入框
   let best: HTMLElement | null = null;
   let bestY = Infinity;
@@ -1929,6 +2001,8 @@ function findElementBelowY(referenceY: number): HTMLElement | null {
       bestY = rect.top;
     }
   }
+
+  console.log(`[FormSnap] findElementBelowY(refY=${Math.round(referenceY)}): found ${best ? `<${best.tagName} class="${(best.className?.toString() || '').slice(0, 30)}" at Y=${Math.round(bestY)}>` : 'null'}`);
 
   return best;
 }
