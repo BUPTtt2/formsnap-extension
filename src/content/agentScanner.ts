@@ -1797,10 +1797,10 @@ export async function fillFromAnchor(
           result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
           break;
         }
-        await delay(2000); // 等待新行渲染（增加延迟）
+        await delay(1500); // 等待新行渲染
 
         // 新增行后，必须用 Y 坐标递增定位新行（不能用 relocate，因为 selector 会匹配旧行）
-        anchorEl = findElementBelowY(lastAnchorY, 30);
+        anchorEl = findElementBelowY(lastAnchorY, 15);
         if (!anchorEl) {
           result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框 (lastY=${Math.round(lastAnchorY)})`);
           break;
