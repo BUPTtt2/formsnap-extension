@@ -1799,17 +1799,13 @@ export async function fillFromAnchor(
         }
         await delay(2000); // 等待新行渲染（增加延迟）
 
-        // 重新定位锚定元素（DOM 可能已更新）
-        anchorEl = relocateAnchorElement(anchorInfo);
-        // 如果重新定位失败，用 Y 坐标递增策略找新行首元素
+        // 新增行后，必须用 Y 坐标递增定位新行（不能用 relocate，因为 selector 会匹配旧行）
+        anchorEl = findElementBelowY(lastAnchorY, 30);
         if (!anchorEl) {
-          // Use a more generous threshold: new row must be at least 30px below last anchor Y
-          anchorEl = findElementBelowY(lastAnchorY, 30);
-          if (!anchorEl) {
-            result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框`);
-            break;
-          }
+          result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框 (lastY=${Math.round(lastAnchorY)})`);
+          break;
         }
+        console.log(`[FormSnap] Row ${rowIdx}: relocated to new row at Y=${Math.round(anchorEl.getBoundingClientRect().top)}`);
       }
 
       if (!anchorEl) {
