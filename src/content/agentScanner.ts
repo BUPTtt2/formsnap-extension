@@ -1022,8 +1022,32 @@ export async function fillRowByRowAgent(
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
     const rowData = dataRows[rowIdx];
     try {
-      // Click "+ 新增" for rows after the first
+      // First snapshot on the very first iteration
+      if (rowIdx === 0 && prevTotalInputs === 0) {
+        const allInputs = getRowTextInputs();
+        const allToggles = getAllToggles();
+        prevTotalInputs = allInputs.length;
+        prevTotalToggles = allToggles.length;
+        console.log(`[FormSnap] Row 0 snapshot: ${prevTotalInputs} inputs, ${prevTotalToggles} toggles`);
+      }
+
+      // For rows where we already have an empty row (Row 0), fill it directly
+      // For subsequent rows, we need to click "+ 新增" first
+      let needAddRow = rowIdx > 0;
+      // But also check if there are already enough rows (user may have manually added some)
       if (rowIdx > 0) {
+        const currentBeforeAdd = getRowTextInputs();
+        const existingRowCount = Math.floor(currentBeforeAdd.length / INPUTS_PER_ROW);
+        if (existingRowCount >= rowIdx + 1) {
+          // Already have enough rows, no need to add
+          needAddRow = false;
+          prevTotalInputs = rowIdx * INPUTS_PER_ROW; // Adjust baseline
+          prevTotalToggles = rowIdx * TOGGLES_PER_ROW;
+          console.log(`[FormSnap] Row ${rowIdx}: already ${existingRowCount} rows exist, skipping add`);
+        }
+      }
+
+      if (needAddRow) {
         let added = false;
         const addButtons = document.querySelectorAll(
           'button, a, span, div[role="button"], [class*="add"], [class*="Add"], [class*="new"], [class*="New"]'
@@ -1046,13 +1070,6 @@ export async function fillRowByRowAgent(
           continue;
         }
         await delay(1500); // Wait for new row to render
-      } else {
-        // Row 0: snapshot current totals
-        const allInputs = getRowTextInputs();
-        const allToggles = getAllToggles();
-        prevTotalInputs = allInputs.length;
-        prevTotalToggles = allToggles.length;
-        console.log(`[FormSnap] Row 0 snapshot: ${prevTotalInputs} inputs, ${prevTotalToggles} toggles`);
       }
 
       // Get current totals
@@ -1060,8 +1077,23 @@ export async function fillRowByRowAgent(
       const currentToggles = getAllToggles();
 
       // Extract new inputs/toggles for this row
-      const newRowInputs = currentInputs.slice(prevTotalInputs);
-      const newRowToggles = currentToggles.slice(prevTotalToggles);
+      // For Row 0: take the first INPUTS_PER_ROW inputs from current
+      // For Row N (after add): take inputs after prevTotalInputs
+      let newRowInputs: HTMLElement[];
+      let newRowToggles: HTMLElement[];
+      if (rowIdx === 0) {
+        newRowInputs = currentInputs.slice(0, INPUTS_PER_ROW);
+        newRowToggles = currentToggles.slice(0, TOGGLES_PER_ROW);
+        // Set prev totals to the end of Row 0
+        prevTotalInputs = INPUTS_PER_ROW;
+        prevTotalToggles = TOGGLES_PER_ROW;
+      } else {
+        newRowInputs = currentInputs.slice(prevTotalInputs);
+        newRowToggles = currentToggles.slice(prevTotalToggles);
+        // Update prev totals for next iteration
+        prevTotalInputs = currentInputs.length;
+        prevTotalToggles = currentToggles.length;
+      }
 
       console.log(`[FormSnap] Row ${rowIdx}: new ${newRowInputs.length} inputs, ${newRowToggles.length} toggles (total: ${currentInputs.length} inputs, ${currentToggles.length} toggles)`);
 
@@ -1099,10 +1131,6 @@ export async function fillRowByRowAgent(
           result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框 (found ${newRowInputs.length})`);
         }
       }
-
-      // Update totals for next iteration
-      prevTotalInputs = currentInputs.length;
-      prevTotalToggles = currentToggles.length;
 
       if (rowFilled > 0) result.filledRows++;
       await delay(300);
