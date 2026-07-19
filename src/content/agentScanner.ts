@@ -1553,8 +1553,9 @@ function enterAnchorMode(sendResponse: (response: any) => void): boolean {
     const el = isInput ? target : parentInput;
     if (!el) return;
 
-    e.preventDefault();
-    e.stopPropagation();
+    // DON'T call preventDefault/stopPropagation — let the click reach the input normally
+    // e.preventDefault();
+    // e.stopPropagation();
 
     // 记录锚定元素信息
     const info = extractAnchorInfo(el);
@@ -1565,6 +1566,8 @@ function enterAnchorMode(sendResponse: (response: any) => void): boolean {
     // 退出锚定模式
     exitAnchorMode();
 
+    // Store anchor result in chrome.storage (popup may close when user clicks page)
+    chrome.storage.local.set({ '_formsnap_anchor_result': { success: true, anchor: info, timestamp: Date.now() } });
     sendResponse({ success: true, anchor: info });
   };
 
@@ -1573,6 +1576,7 @@ function enterAnchorMode(sendResponse: (response: any) => void): boolean {
     if (e.key === 'Escape') {
       e.preventDefault();
       exitAnchorMode();
+      chrome.storage.local.set({ '_formsnap_anchor_result': { success: false, reason: '用户取消', timestamp: Date.now() } });
       sendResponse({ success: false, reason: '用户取消' });
     }
   };
