@@ -911,82 +911,47 @@ export default function Popup() {
       throw new Error('无法注入脚本到目标页面: ' + injectErr.message);
     }
 
-    // Step 1: 进入锚定模式，等待用户点击第一个输入框
+    // Step 1: 进入锚定模式，dataRows 一并发送，锚定后自动填写
     setLoading(true);
     setStep('filling');
-    setStatus({ type: 'info', text: '请在目标页面点击第一个要填写的输入框...\n（点击后插件窗口会关闭，请重新打开插件继续）' });
+    setStatus({ type: 'info', text: '请在目标页面点击第一个要填写的输入框...\n（点击后将自动开始填写，无需重新打开插件）' });
 
     try {
-      await sendMessage('START_ANCHOR_MODE', {});
-      // Don't await the response — popup will close when user clicks on page
-      // Content script stores result in chrome.storage.local._formsnap_anchor_result
-      // When user reopens popup, we'll check for it in the effect below
+      await sendMessage('START_ANCHOR_MODE', { dataRows });
+      // popup 关闭后 content script 会自动执行填写
+      // 填写结果存到 chrome.storage.local._formsnap_fill_result
+      // 重新打开 popup 时 useEffect 会自动检查并显示
       setLoading(false);
     } catch (err: any) {
       setLoading(false);
       setStep('data-review');
       setStatus({ type: 'error', text: '锚定启动失败: ' + err.message });
     }
-    return; // Don't proceed to fill — wait for user to reopen popup after anchoring
   }, [parsedFields]);
 
-  // Effect: on popup open, check if there's a pending anchor result from content script
+  // Effect: on popup open, check if there's a pending fill result from auto-fill
   useEffect(() => {
-    if (step !== 'filling' && step !== 'data-review') return;
-    chrome.storage.local.get('_formsnap_anchor_result', async (result) => {
-      const anchorData = result._formsnap_anchor_result;
-      if (!anchorData) return;
+    chrome.storage.local.get('_formsnap_fill_result', async (result) => {
+      const fillData = result._formsnap_fill_result;
+      if (!fillData) return;
       // Clear the stored result
-      chrome.storage.local.remove('_formsnap_anchor_result');
+      chrome.storage.local.remove('_formsnap_fill_result');
 
-      if (!anchorData.success) {
-        setStatus({ type: 'error', text: anchorData.reason || '锚定取消' });
-        setStep('data-review');
-        return;
-      }
+      const totalRows = fillData.totalRows || 0;
+      const filledRows = fillData.filledRows || 0;
+      const errors = fillData.errors || [];
 
-      // Anchor was successful — proceed to fill
-      const anchorInfo = anchorData.anchor;
-      setStatus({ type: 'info', text: `已锚定到 <${anchorInfo.tag}>，开始填写...` });
-
-      // Reconstruct dataRows from parsedFields
-      const groups: Record<string, ParsedField[]> = {};
-      parsedFields.forEach((f) => {
-        const match = f.field.match(/^(\d+)\./);
-        const key = match ? match[1] : '_flat';
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(f);
-      });
-      const rowKeys = Object.keys(groups).filter((k) => k !== '_flat').sort((a, b) => +a - +b);
-      if (rowKeys.length === 0) return;
-      const dataRows = rowKeys.map((key) =>
-        groups[key].map((f) => ({
-          colName: f.field.replace(/^\d+\./, ''),
-          value: f.value,
-          type: f.type,
-        }))
-      );
-
-      setAgentProgress({ current: 0, total: dataRows.length });
-
-      try {
-        const fillResult = await sendMessage<{ totalRows: number; filledRows: number; errors: string[] }>(
-          'FILL_FROM_ANCHOR',
-          { anchorInfo, dataRows }
-        );
-        setAgentProgress(null);
-        setFillResult({ total: fillResult.totalRows, success: fillResult.filledRows, failed: fillResult.totalRows - fillResult.filledRows });
-        setCanUndo(false);
-        setStep('done');
-        const errHint = fillResult.errors.length > 0 ? `（${fillResult.errors.length} 个警告）` : '';
-        setStatus({ type: 'success', text: `逐行填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功${errHint}` });
-      } catch (err: any) {
-        setAgentProgress(null);
-        setStatus({ type: 'error', text: '逐行填写失败: ' + (err.message || '未知错误') });
-        setStep('data-review');
+      setFillResult({ total: totalRows, success: filledRows, failed: totalRows - filledRows });
+      setCanUndo(false);
+      setStep('done');
+      const errHint = errors.length > 0 ? `（${errors.length} 个警告）` : '';
+      if (filledRows === totalRows) {
+        setStatus({ type: 'success', text: `逐行填写完成：${filledRows}/${totalRows} 行成功${errHint}` });
+      } else {
+        setStatus({ type: 'error', text: `逐行填写完成：${filledRows}/${totalRows} 行成功${errHint}` });
       }
     });
-  }, [step, parsedFields]);
+  }, []);
 
   // Diagnose page structure
   const handleDiagnose = useCallback(async () => {

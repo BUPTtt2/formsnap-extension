@@ -1495,10 +1495,51 @@ let anchorClickListener: ((e: MouseEvent) => void) | null = null;
 let anchorCancelKeyListener: ((e: KeyboardEvent) => void) | null = null;
 
 /**
+ * 在页面上显示浮动通知（右上角，3秒后自动消失）
+ */
+function showFloatingNotification(message: string, type: 'info' | 'success' | 'error' = 'info'): void {
+  const colors = {
+    info: 'rgba(59, 130, 246, 0.95)',
+    success: 'rgba(34, 197, 94, 0.95)',
+    error: 'rgba(239, 68, 68, 0.95)',
+  };
+  const notification = document.createElement('div');
+  notification.id = 'formsnap-floating-notify';
+  Object.assign(notification.style, {
+    position: 'fixed',
+    top: '16px',
+    right: '16px',
+    background: colors[type],
+    color: '#fff',
+    padding: '12px 20px',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: '500',
+    zIndex: '2147483647',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    transition: 'opacity 0.3s',
+    maxWidth: '400px',
+    lineHeight: '1.4',
+  });
+  notification.textContent = `FormSnap: ${message}`;
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.style.opacity = '0';
+    setTimeout(() => notification.remove(), 300);
+  }, 3000);
+}
+
+/**
  * 进入锚定模式：添加半透明遮罩 + 提示，监听用户点击输入框。
+ * 锚定成功后自动开始填写（无需重新打开 popup）。
  * 使用 document 级别的 mousedown 事件，遮罩设置 pointer-events: none。
  */
-function enterAnchorMode(sendResponse: (response: any) => void): boolean {
+function enterAnchorMode(
+  sendResponse: (response: any) => void,
+  dataRows?: { colName: string; value: string; type: string }[][],
+): boolean {
   // 如果已在锚定模式，先退出
   exitAnchorMode();
 
@@ -1566,9 +1607,55 @@ function enterAnchorMode(sendResponse: (response: any) => void): boolean {
     // 退出锚定模式
     exitAnchorMode();
 
-    // Store anchor result in chrome.storage (popup may close when user clicks page)
+    // 同时存储 anchor result（兼容旧逻辑）
     chrome.storage.local.set({ '_formsnap_anchor_result': { success: true, anchor: info, timestamp: Date.now() } });
-    sendResponse({ success: true, anchor: info });
+
+    // 如果有 dataRows，直接自动填写
+    if (dataRows && dataRows.length > 0) {
+      showFloatingNotification('已锚定，开始自动填写...', 'info');
+      sendResponse({ success: true, anchor: info, autoFill: true });
+
+      // 异步执行填写
+      fillFromAnchor(info, dataRows).then((fillResult) => {
+        console.log('[FormSnap] 自动填写完成:', fillResult);
+        // 存储填写结果到 chrome.storage.local
+        chrome.storage.local.set({
+          '_formsnap_fill_result': {
+            totalRows: fillResult.totalRows,
+            filledRows: fillResult.filledRows,
+            errors: fillResult.errors,
+            timestamp: Date.now(),
+          },
+        });
+
+        if (fillResult.filledRows === fillResult.totalRows) {
+          showFloatingNotification(
+            `填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功`,
+            'success',
+          );
+        } else {
+          const errHint = fillResult.errors.length > 0 ? `（${fillResult.errors.length} 个警告）` : '';
+          showFloatingNotification(
+            `填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功${errHint}`,
+            fillResult.filledRows > 0 ? 'info' : 'error',
+          );
+        }
+      }).catch((err) => {
+        console.error('[FormSnap] 自动填写失败:', err);
+        chrome.storage.local.set({
+          '_formsnap_fill_result': {
+            totalRows: dataRows.length,
+            filledRows: 0,
+            errors: [err instanceof Error ? err.message : String(err)],
+            timestamp: Date.now(),
+          },
+        });
+        showFloatingNotification('填写失败: ' + (err instanceof Error ? err.message : String(err)), 'error');
+      });
+    } else {
+      // 没有 dataRows，仅返回锚定结果（兼容旧逻辑）
+      sendResponse({ success: true, anchor: info });
+    }
   };
 
   // Esc 取消
@@ -1923,42 +2010,120 @@ function findRowElements(anchorRect: DOMRect, anchorEl?: HTMLElement): { element
 }
 
 /**
- * 在锚定元素附近查找并点击"+ 新增"按钮。
+ * 在页面上查找并点击"+ 新增"按钮。
+ * 搜索整个可见页面，支持文字关键词和纯图标按钮，优先选择距离锚定元素最近的。
  */
 async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
-  // 先在锚定元素的上方/同行区域查找
   const anchorRect = anchorEl.getBoundingClientRect();
-  const searchRegion = anchorRect.top - 200; // 往上搜索 200px
+  const anchorCX = anchorRect.left + anchorRect.width / 2;
+  const anchorCY = anchorRect.top + anchorRect.height / 2;
 
-  // 查找所有包含"新增"文字的按钮
-  const keywords = ['新增', '添加', '新建', '添加行', '+ 新增', '+ 新建'];
+  // 文字关键词
+  const textKeywords = [
+    '+ 新增', '新增', '新增变量', '添加变量', '新增行', '添加行',
+    '添加', '新建', '+ 新建', '+ Add', 'add variable',
+    'Add', 'New', '+', '增加',
+  ];
+
   const buttons = document.querySelectorAll(
     'button, [role="button"], a, span, div'
   );
 
-  // 收集匹配的按钮，按距离锚定元素上方的远近排序
-  const matched: { el: HTMLElement; dist: number }[] = [];
+  // 收集匹配的按钮，按与锚定元素的距离排序
+  const matched: { el: HTMLElement; dist: number; priority: number }[] = [];
+
   for (const btn of Array.from(buttons)) {
     const el = btn as HTMLElement;
     if (!isVisible(el)) continue;
 
+    const rect = el.getBoundingClientRect();
+    // 按钮尺寸过滤：排除过大的容器元素
+    if (rect.width > 300 || rect.height > 80) continue;
+
     const text = (el.textContent || '').trim();
     const ariaLabel = (el.getAttribute('aria-label') || '').trim();
     const title = (el.getAttribute('title') || '').trim();
-    const combined = `${text} ${ariaLabel} ${title}`;
+    const className = (el.className || '').toString().toLowerCase();
+    const combined = `${text} ${ariaLabel} ${title} ${className}`;
 
-    for (const kw of keywords) {
-      if (combined.includes(kw)) {
-        const rect = el.getBoundingClientRect();
-        const dist = Math.abs(rect.top - searchRegion);
-        matched.push({ el, dist });
+    let priority = 0; // 越高越优先
+
+    // 1. 精确文字匹配（最高优先级）
+    const highPriorityKw = ['+ 新增', '新增变量', '添加变量', '新增行', '添加行', 'add variable', '+ Add'];
+    for (const kw of highPriorityKw) {
+      if (text === kw || text.startsWith(kw)) {
+        priority = 10;
         break;
       }
     }
+
+    // 2. 包含关键词
+    if (priority === 0) {
+      const medPriorityKw = ['新增', '添加', '新建', '增加'];
+      for (const kw of medPriorityKw) {
+        if (combined.includes(kw)) {
+          priority = 5;
+          break;
+        }
+      }
+    }
+
+    // 3. class 包含 add/new 关键词（无文字的图标按钮）
+    if (priority === 0) {
+      const classKw = ['add', 'new', 'create', 'plus'];
+      for (const kw of classKw) {
+        if (className.includes(kw) && text.length < 5) {
+          priority = 3;
+          break;
+        }
+      }
+    }
+
+    // 4. 纯图标按钮：包含 SVG + 号，无文字
+    if (priority === 0 && text.length === 0) {
+      const svgEl = el.querySelector('svg');
+      if (svgEl) {
+        const svgText = svgEl.textContent || '';
+        const svgPath = (svgEl.innerHTML || '').toLowerCase();
+        if (svgText.includes('+') || svgPath.includes('plus') || svgPath.includes('add')) {
+          priority = 2;
+        }
+        // 也可以检查 SVG path data 中常见的加号图形（两条交叉线）
+        if (priority === 0 && svgPath.includes('m-') || svgPath.includes('m10') || svgPath.includes('m12')) {
+          // 宽泛匹配 SVG 路径中可能包含加号的图标
+          const paths = el.querySelectorAll('path');
+          for (const p of Array.from(paths)) {
+            const d = (p.getAttribute('d') || '').toLowerCase();
+            // 加号通常是两条交叉线：一条水平一条垂直
+            if ((d.includes('h') && d.includes('v')) || d.includes('m11') || d.includes('m12')) {
+              priority = 1;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (priority > 0) {
+      // 计算与锚定元素的距离（欧几里得距离）
+      const btnCX = rect.left + rect.width / 2;
+      const btnCY = rect.top + rect.height / 2;
+      const dx = btnCX - anchorCX;
+      const dy = btnCY - anchorCY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      console.log(`[FormSnap] findAndClickAddButton: 候选按钮 text="${text.slice(0, 20)}" class="${className.slice(0, 40)}" dist=${Math.round(dist)} priority=${priority}`);
+      matched.push({ el, dist, priority });
+    }
   }
 
-  // 按距离排序，优先选择锚定元素上方的按钮
-  matched.sort((a, b) => a.dist - b.dist);
+  // 排序：优先级高的在前，同优先级按距离排序
+  matched.sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    return a.dist - b.dist;
+  });
+
+  console.log(`[FormSnap] findAndClickAddButton: 共找到 ${matched.length} 个候选按钮，选择第1个`);
 
   if (matched.length > 0) {
     const btn = matched[0].el;
@@ -1970,6 +2135,7 @@ async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
     return true;
   }
 
+  console.log('[FormSnap] findAndClickAddButton: 未找到任何新增按钮');
   return false;
 }
 
@@ -2083,8 +2249,8 @@ chrome.runtime.onMessage.addListener(
         }
 
         case AGENT_MESSAGE_TYPES.EXEC_START_ANCHOR_MODE: {
-          // 锚定模式：异步等待用户点击，通过 sendResponse 返回
-          return enterAnchorMode(sendResponse);
+          const dataRows = message.payload?.dataRows as { colName: string; value: string; type: string }[][] | undefined;
+          return enterAnchorMode(sendResponse, dataRows);
         }
 
         case AGENT_MESSAGE_TYPES.EXEC_CANCEL_ANCHOR_MODE: {

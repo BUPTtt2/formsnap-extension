@@ -266,7 +266,7 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ success: false, error: '未找到活动标签页' });
             return;
           }
-          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_START_ANCHOR_MODE' }, (response) => {
+          chrome.tabs.sendMessage(tabId!, { type: 'EXEC_START_ANCHOR_MODE', payload: message.payload }, (response) => {
             if (chrome.runtime.lastError) {
               sendResponse({ success: false, error: chrome.runtime.lastError.message });
             } else {
