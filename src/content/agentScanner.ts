@@ -970,108 +970,18 @@ export async function fillRowByRowAgent(
 ): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
   const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
 
-  // Find all existing variable rows in the dialog
-  const getExistingRows = (): HTMLElement[] => {
-    const modals = findVisibleModals();
-    const scope = modals.length > 0 ? modals[0] : document.body;
-    // Look for variable row containers (Element UI table rows, card items, form items)
-    const rowSelectors = [
-      '.el-table__row', '.el-table__body-wrapper tr',
-      '.el-form-item', '.el-row',
-      '[class*="var-item"]', '[class*="var_row"]', '[class*="variable-row"]',
-      '[class*="card-item"]',
-    ];
-    const rows: HTMLElement[] = [];
-    for (const sel of rowSelectors) {
-      try {
-        scope.querySelectorAll(sel).forEach((el) => {
-          const htmlEl = el as HTMLElement;
-          if (isVisible(htmlEl) && !rows.includes(htmlEl)) {
-            rows.push(htmlEl);
-          }
-        });
-      } catch {}
-    }
-    // If no rows found with selectors, try a different strategy: find rows by visual grouping
-    if (rows.length === 0) {
-      // Group input elements by their Y position (rows on the same Y coordinate belong to the same row)
-      const allInputs = getAllRowInputs();
-      const rowMap = new Map<number, HTMLElement[]>();
-      allInputs.forEach((input) => {
-        const rect = input.getBoundingClientRect();
-        const yKey = Math.round(rect.top / 10); // Group by 10px bands
-        if (!rowMap.has(yKey)) rowMap.set(yKey, []);
-        rowMap.get(yKey)!.push(input);
-      });
-      // Each group is a "row"
-      const sortedKeys = Array.from(rowMap.keys()).sort();
-      sortedKeys.forEach((key) => {
-        const group = rowMap.get(key)!;
-        // Find common parent for this group
-        const parent = group[0].closest('.el-collapse-item__content, .el-dialog__body, .card-item, form, [class*="body"]') as HTMLElement | null;
-        if (parent && !rows.includes(parent)) rows.push(parent);
-      });
-    }
-    return rows;
-  };
+  // Use global counting: each row adds exactly INPUTS_PER_ROW inputs and TOGGLES_PER_ROW toggles
+  const INPUTS_PER_ROW = 3;  // 名称, 描述, 默认值
+  const TOGGLES_PER_ROW = 2;  // 支持Prompt, 支持工作流
 
-  const getRowInputs = (rowEl: HTMLElement): { inputs: HTMLElement[]; toggles: HTMLElement[] } => {
-    const inputs: HTMLElement[] = [];
-    const toggles: HTMLElement[] = [];
-    const seen = new WeakSet<HTMLElement>();
-
-    const addInput = (el: HTMLElement) => {
-      if (seen.has(el)) return;
-      seen.add(el);
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 10 || rect.height < 5) return;
-      if (!isVisible(el)) return;
-      inputs.push(el);
-    };
-
-    rowEl.querySelectorAll(
-      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]):not([type="file"]), textarea, [contenteditable="true"], .el-input, .ant-input'
-    ).forEach((el) => addInput(el as HTMLElement));
-
-    rowEl.querySelectorAll('[tabindex]').forEach((el) => {
-      const htmlEl = el as HTMLElement;
-      const style = window.getComputedStyle(htmlEl);
-      if ((style.cursor === 'text' || style.cursor === 'auto') && !htmlEl.matches('input, textarea, select, [contenteditable]')) {
-        const rect = htmlEl.getBoundingClientRect();
-        if (rect.width > 30 && rect.width < 800 && rect.height > 15 && rect.height < 200) {
-          addInput(htmlEl);
-        }
-      }
-    });
-
-    rowEl.querySelectorAll(
-      '[role="switch"], .el-switch, .ant-switch, [class*="switch"]'
-    ).forEach((el) => {
-      const htmlEl = el as HTMLElement;
-      if (!seen.has(htmlEl) && isVisible(htmlEl)) {
-        seen.add(htmlEl);
-        toggles.push(htmlEl);
-      }
-    });
-
-    // Sort inputs by position
-    inputs.sort((a, b) => {
-      const aR = a.getBoundingClientRect();
-      const bR = b.getBoundingClientRect();
-      return Math.abs(aR.top - bR.top) < 5 ? aR.left - bR.left : aR.top - bR.top;
-    });
-
-    return { inputs, toggles };
-  };
-
-  let existingRows = getExistingRows();
-  console.log(`[FormSnap] fillRowByRow: found ${existingRows.length} existing rows, need to fill ${dataRows.length} rows`);
+  let prevTotalInputs = 0;
+  let prevTotalToggles = 0;
 
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
     const rowData = dataRows[rowIdx];
     try {
+      // Click "+ 新增" for rows after the first
       if (rowIdx > 0) {
-        // Click "+ 新增" button
         let added = false;
         const addButtons = document.querySelectorAll(
           'button, a, span, div[role="button"], [class*="add"], [class*="Add"], [class*="new"], [class*="New"]'
@@ -1093,57 +1003,148 @@ export async function fillRowByRowAgent(
           result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
           continue;
         }
-        await delay(1500); // Wait for new row to fully render
-        existingRows = getExistingRows(); // Re-scan rows
+        await delay(1500); // Wait for new row to render
+      } else {
+        // Row 0: snapshot current totals
+        const allInputs = getAllRowInputs();
+        const allToggles = getAllToggles();
+        prevTotalInputs = allInputs.length;
+        prevTotalToggles = allToggles.length;
+        console.log(`[FormSnap] Row 0 snapshot: ${prevTotalInputs} inputs, ${prevTotalToggles} toggles`);
       }
 
-      // Find the target row (last row or the rowIdx-th row)
-      const targetRow = existingRows[Math.min(rowIdx, existingRows.length - 1)];
-      if (!targetRow) {
-        result.errors.push(`第 ${rowIdx + 1} 行：找不到目标行容器`);
-        continue;
-      }
+      // Get current totals
+      const currentInputs = getAllRowInputs();
+      const currentToggles = getAllToggles();
 
-      const { inputs, toggles } = getRowInputs(targetRow);
-      console.log(`[FormSnap] Row ${rowIdx}: ${inputs.length} inputs, ${toggles.length} toggles in row container`);
+      // Extract new inputs/toggles for this row
+      const newRowInputs = currentInputs.slice(prevTotalInputs);
+      const newRowToggles = currentToggles.slice(prevTotalToggles);
 
-      let rowFilled = 0;
+      console.log(`[FormSnap] Row ${rowIdx}: new ${newRowInputs.length} inputs, ${newRowToggles.length} toggles (total: ${currentInputs.length} inputs, ${currentToggles.length} toggles)`);
+
       let inputIdx = 0;
       let toggleIdx = 0;
+      let rowFilled = 0;
 
       for (const field of rowData) {
+        // Handle toggle fields
         if (field.type === 'checkbox' || field.type === 'toggle') {
-          if (toggleIdx < toggles.length) {
-            fillToggle(toggles[toggleIdx], field.value);
+          if (toggleIdx < newRowToggles.length) {
+            const toggleEl = newRowToggles[toggleIdx];
+            fillToggle(toggleEl, field.value);
+            console.log(`[FormSnap] Toggle ${rowIdx}.${toggleIdx}: "${field.colName}" = "${field.value}"`, toggleEl);
             rowFilled++;
             toggleIdx++;
-            await delay(100);
+            await delay(150);
+          } else {
+            result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应开关 (found ${newRowToggles.length})`);
           }
           continue;
         }
 
-        if (inputIdx < inputs.length) {
-          setNativeValue(inputs[inputIdx], field.value);
-          inputs[inputIdx].dispatchEvent(new Event('input', { bubbles: true }));
-          inputs[inputIdx].dispatchEvent(new Event('change', { bubbles: true }));
-          (inputs[inputIdx] as HTMLInputElement)?.focus?.();
-          console.log(`[FormSnap] Fill: "${field.colName}" = "${field.value}" into`, inputs[inputIdx]);
+        // Handle text/value fields
+        if (inputIdx < newRowInputs.length) {
+          const inputEl = newRowInputs[inputIdx];
+          // Use direct input setting approach — don't use querySelector inside setNativeValue
+          // because it can cross row boundaries
+          setNativeValueDirect(inputEl, field.value);
+          console.log(`[FormSnap] Fill ${rowIdx}.${inputIdx}: "${field.colName}" = "${field.value}"`, inputEl);
           rowFilled++;
           inputIdx++;
-          await delay(150);
+          await delay(200);
         } else {
-          result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框 (found ${inputs.length})`);
+          result.errors.push(`第 ${rowIdx + 1} 行 "${field.colName}"：找不到对应输入框 (found ${newRowInputs.length})`);
         }
       }
 
+      // Update totals for next iteration
+      prevTotalInputs = currentInputs.length;
+      prevTotalToggles = currentToggles.length;
+
       if (rowFilled > 0) result.filledRows++;
-      await delay(200);
+      await delay(300);
     } catch (err) {
       result.errors.push(`第 ${rowIdx + 1} 行出错: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   return result;
+}
+
+/**
+ * Direct value setting — operates on the exact element, no querySelector cross-boundary.
+ */
+function setNativeValueDirect(element: HTMLElement, value: string): void {
+  // If element IS the actual input/textarea
+  if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      element.tagName === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
+      'value'
+    )?.set;
+    if (nativeSetter) {
+      nativeSetter.call(element, value);
+    } else {
+      (element as HTMLInputElement).value = value;
+    }
+    dispatchVueEvents(element);
+    return;
+  }
+
+  // If element is contenteditable
+  if ((element as HTMLElement).isContentEditable) {
+    element.textContent = value;
+    element.innerText = value;
+    dispatchVueEvents(element);
+    return;
+  }
+
+  // If element is a wrapper, find ONLY direct child input (not deep querySelector)
+  const directChildren = element.children;
+  for (const child of Array.from(directChildren)) {
+    if (child.tagName === 'INPUT' || child.tagName === 'TEXTAREA') {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        child.tagName === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
+        'value'
+      )?.set;
+      if (nativeSetter) {
+        nativeSetter.call(child, value);
+      } else {
+        (child as HTMLInputElement).value = value;
+      }
+      dispatchVueEvents(child as HTMLElement);
+      return;
+    }
+  }
+
+  // Last resort: try first-level querySelector but limit depth
+  const firstInput = element.querySelector(':scope > input, :scope > textarea, :scope > [contenteditable]');
+  if (firstInput) {
+    const target = firstInput as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        target.tagName === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
+        'value'
+      )?.set;
+      if (nativeSetter) {
+        nativeSetter.call(target, value);
+      } else {
+        (target as HTMLInputElement).value = value;
+      }
+    } else if (target.isContentEditable) {
+      target.textContent = value;
+    }
+    dispatchVueEvents(target);
+  }
+}
+
+function dispatchVueEvents(element: HTMLElement): void {
+  const events = ['input', 'change', 'blur'];
+  for (const eventName of events) {
+    element.dispatchEvent(new Event(eventName, { bubbles: true, cancelable: true }));
+  }
+  // Also trigger composition events for CJK input
+  element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }));
 }
 
 /**

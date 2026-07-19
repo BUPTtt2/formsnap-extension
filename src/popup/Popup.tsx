@@ -1087,53 +1087,100 @@ export default function Popup() {
         </div>
       </div>
 
-      {/* History Panel */}
+          {/* History Panel */}
       {showHistory && (
         <div style={{ marginBottom: 12, padding: '10px', background: 'rgba(59,130,246,0.04)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontWeight: 600, fontSize: 13, color: '#374151' }}>历史记录</span>
-            <div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {parsedFields.length > 0 && (
+                <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 8px', borderColor: '#22c55e', color: '#16a34a' }}
+                  onClick={() => {
+                    const label = prompt('保存预设名称（可选）：') || `${parsedFields.length} 字段`;
+                    handleSaveManual(0); // Quick save to slot 0
+                    setStatus({ type: 'success', text: `已快速保存: ${label}` });
+                  }}>快速保存当前</button>
+              )}
               <button className="icon-btn" onClick={() => setShowHistory(false)} style={{ fontSize: 14 }}>✕</button>
             </div>
           </div>
-          {historyEntries.length === 0 ? (
-            <div style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>暂无历史记录</div>
-          ) : (
-            <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-              {historyEntries.map((entry) => (
-                <div key={entry.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f3f4f6', fontSize: 11 }}>
-                  <div>
-                    <div style={{ color: '#374151', fontWeight: 500 }}>{entry.label || (entry.type === 'auto' ? '自动保存' : '手动保存')}</div>
-                    <div style={{ color: '#9ca3af', fontSize: 10 }}>{new Date(entry.timestamp).toLocaleString()} · {entry.data.parsedFields?.length || 0} 字段</div>
+
+          {/* Tab switch: auto / manual */}
+          {(() => {
+            const autoEntries = historyEntries.filter(e => e.type === 'auto');
+            const manualEntries = historyEntries.filter(e => e.type === 'manual');
+            return (
+              <>
+                {/* Auto history */}
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginBottom: 4 }}>最近自动保存</div>
+                  {autoEntries.length === 0 ? (
+                    <div style={{ fontSize: 11, color: '#9ca3af', padding: '4px 0' }}>暂无记录</div>
+                  ) : (
+                    <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+                      {autoEntries.map((entry) => (
+                        <div key={entry.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #f3f4f6', fontSize: 11 }}>
+                          <div>
+                            <div style={{ color: '#374151' }}>{entry.label || `${entry.data.parsedFields?.length || 0} 字段`}</div>
+                            <div style={{ color: '#9ca3af', fontSize: 10 }}>{new Date(entry.timestamp).toLocaleString()}</div>
+                          </div>
+                          <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 6px' }}
+                            onClick={() => handleRestoreHistory(entry)}>恢复</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual presets */}
+                <div>
+                  <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginBottom: 4 }}>
+                    手动预设（{manualEntries.length}/6）
                   </div>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 8px' }}
-                      onClick={() => handleRestoreHistory(entry)}>恢复</button>
-                    {entry.type === 'manual' && (
-                      <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 8px', color: '#ef4444', borderColor: '#fca5a5' }}
-                        onClick={async () => { await sendMessage('DELETE_HISTORY_ENTRY', { key: entry.key }); handleLoadHistory(); }}>删除</button>
-                    )}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                    {[0, 1, 2, 3, 4, 5].map((slot) => {
+                      const existing = manualEntries.find((e) => e.key === `history_manual_${slot}`);
+                      return (
+                        <button key={slot} className="btn btn-outline"
+                          style={{
+                            fontSize: 10, padding: '6px 4px', textAlign: 'left',
+                            borderColor: existing ? '#fbbf24' : '#e5e7eb',
+                            background: existing ? 'rgba(251,191,36,0.05)' : 'transparent',
+                            borderRadius: 6, display: 'flex', flexDirection: 'column', alignItems: 'flex-start'
+                          }}
+                          onClick={() => {
+                            if (existing) {
+                              handleRestoreHistory(existing);
+                            } else if (parsedFields.length > 0) {
+                              const label = prompt(`保存预设 ${slot + 1} 名称：`, `预设 ${slot + 1}`);
+                              if (label !== null) {
+                                sendMessage('SAVE_MAPPING_HISTORY', {
+                                  type: 'manual', slot, label,
+                                  data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review' },
+                                }).then(() => {
+                                  setStatus({ type: 'success', text: `已保存预设: ${label}` });
+                                  handleLoadHistory();
+                                });
+                              }
+                            } else {
+                              setStatus({ type: 'info', text: '请先解析数据后再保存预设' });
+                            }
+                          }}
+                          disabled={!existing && parsedFields.length === 0}>
+                          <span style={{ fontWeight: 500, color: '#374151' }}>
+                            {existing ? (existing.label || `预设 ${slot + 1}`).slice(0, 10) : `预设 ${slot + 1}`}
+                          </span>
+                          <span style={{ fontSize: 9, color: '#9ca3af' }}>
+                            {existing ? `${new Date(existing.timestamp).toLocaleDateString()} · ${existing.data.parsedFields?.length || 0}字段` : '空槽位'}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-          {/* Manual save slots */}
-          <div style={{ marginTop: 8, borderTop: '1px solid #e5e7eb', paddingTop: 8 }}>
-            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>手动保存槽位：</div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {[0, 1, 2].map((slot) => {
-                const existing = historyEntries.find((e) => e.key === `history_manual_${slot}`);
-                return (
-                  <button key={slot} className="btn btn-outline" style={{ flex: 1, fontSize: 10, padding: '4px' }}
-                    onClick={() => existing ? handleRestoreHistory(existing) : handleSaveManual(slot)}
-                    disabled={parsedFields.length === 0 && !existing}>
-                    {existing ? `槽${slot + 1}: ${existing.label.slice(0, 6)}` : `保存到槽${slot + 1}`}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
