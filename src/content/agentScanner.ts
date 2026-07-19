@@ -1028,7 +1028,7 @@ export async function fillRowByRowAgent(
         const allToggles = getAllToggles();
         prevTotalInputs = allInputs.length;
         prevTotalToggles = allToggles.length;
-        console.log(`[FormSnap] Row 0 snapshot: ${prevTotalInputs} inputs, ${prevTotalToggles} toggles`);
+        console.log(`[FormSnap] Row 0 initial snapshot: ${prevTotalInputs} inputs, ${prevTotalToggles} toggles`);
       }
 
       // For rows where we already have an empty row (Row 0), fill it directly
@@ -1084,6 +1084,11 @@ export async function fillRowByRowAgent(
       if (rowIdx === 0) {
         newRowInputs = currentInputs.slice(0, INPUTS_PER_ROW);
         newRowToggles = currentToggles.slice(0, TOGGLES_PER_ROW);
+        console.log(`[FormSnap] Row 0 filling: taking first ${INPUTS_PER_ROW} inputs from ${currentInputs.length} total`);
+        newRowInputs.forEach((el, i) => {
+          const r = el.getBoundingClientRect();
+          console.log(`[FormSnap]   input #${i}: <${el.tagName} class="${(el.className?.toString() || '').slice(0, 40)}" pos=(${Math.round(r.x)},${Math.round(r.y)}) size=${Math.round(r.width)}x${Math.round(r.height)}`);
+        });
         // Set prev totals to the end of Row 0
         prevTotalInputs = INPUTS_PER_ROW;
         prevTotalToggles = TOGGLES_PER_ROW;
