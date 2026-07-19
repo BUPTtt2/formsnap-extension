@@ -98,14 +98,50 @@ function isVisible(el: HTMLElement): boolean {
  * 同时派发 input / change 事件确保 onChange 回调执行。
  */
 function setNativeValue(element: HTMLElement, value: string): void {
+  // If element is a wrapper (e.g., .el-input, .ant-input-affix-wrapper), find the actual input inside
+  let target = element;
+  const innerInput = element.querySelector('input, textarea');
+  if (innerInput) {
+    target = innerInput as HTMLElement;
+  }
+
+  // Try native value setter for input/textarea
   const valueSetter =
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set ||
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-  if (valueSetter) {
-    valueSetter.call(element, value);
+
+  if (valueSetter && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+    valueSetter.call(target, value);
+  } else if (target.isContentEditable) {
+    // For contenteditable elements, set innerHTML/textContent
+    target.textContent = value;
+    target.innerText = value;
+  } else if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+    (target as HTMLInputElement).value = value;
   }
-  element.dispatchEvent(new Event('input', { bubbles: true }));
-  element.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // Dispatch React/Vue compatible events
+  const eventInit = { bubbles: true, cancelable: true };
+  target.dispatchEvent(new Event('input', eventInit));
+  target.dispatchEvent(new Event('change', eventInit));
+  target.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', ...eventInit }));
+  target.dispatchEvent(new Event('blur', eventInit));
+
+  // Also try native input setter via prototype (for some Vue components)
+  try {
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value'
+    )?.set;
+    const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, 'value'
+    )?.set;
+    if (target instanceof HTMLInputElement && nativeInputValueSetter) {
+      nativeInputValueSetter.call(target, value);
+    } else if (target instanceof HTMLTextAreaElement && nativeTextareaValueSetter) {
+      nativeTextareaValueSetter.call(target, value);
+    }
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch {}
 }
 
 // ========================== 1. 表格型弹窗扫描 ==========================
@@ -145,18 +181,44 @@ function findVisibleModals(): HTMLElement[] {
     '[class*="form-drawer"]',
   ];
   const modals: HTMLElement[] = [];
+  const seen = new WeakSet<HTMLElement>();
+  const addModal = (el: HTMLElement) => {
+    if (seen.has(el) || !isVisible(el)) return;
+    seen.add(el);
+    modals.push(el);
+  };
   for (const sel of selectors) {
     try {
       const nodes = document.querySelectorAll(sel);
       nodes.forEach((node) => {
         const el = node as HTMLElement;
-        if (isVisible(el) && !modals.includes(el)) {
-          modals.push(el);
+        // Special handling for Element UI dialog wrappers
+        if (el.classList.contains('el-dialog__wrapper')) {
+          // The wrapper itself may not be "visible" in traditional sense, check if dialog inside is shown
+          const dialog = el.querySelector('.el-dialog') as HTMLElement | null;
+          if (dialog) {
+            const wrapperStyle = window.getComputedStyle(el);
+            const dialogStyle = window.getComputedStyle(dialog);
+            // Element UI shows dialog by setting wrapper display + overflow
+            if ((wrapperStyle.display !== 'none' && wrapperStyle.overflow !== 'hidden') ||
+                dialogStyle.display !== 'none') {
+              addModal(dialog);
+              return;
+            }
+          }
         }
+        addModal(el);
       });
     } catch {
       // 无效选择器，跳过
     }
+  }
+
+  // If we found modals, don't use fallbacks
+  if (modals.length > 0) {
+    console.log(`[FormSnap] findVisibleModals found ${modals.length} modals:`,
+      modals.map((m) => `<${m.tagName} class="${(m.className?.toString() || '').slice(0, 50)}">`));
+    return modals;
   }
 
   // 额外查找 position:fixed 遮罩层内第一个可见子容器
@@ -190,23 +252,8 @@ function findVisibleModals(): HTMLElement[] {
           const rect = htmlEl.getBoundingClientRect();
           if (rect.width > 300 && rect.height > 200 && isVisible(htmlEl)) {
             modals.push(htmlEl);
-            break; // 只取第一个大的 fixed 元素
+            break;
           }
-        }
-      }
-    } catch {}
-  }
-
-  // 额外策略：找 Element UI 的变量编辑面板（小建工风格）
-  if (modals.length === 0) {
-    try {
-      // Look for el-dialog wrapper or Element UI dialog
-      const elDialogs = document.querySelectorAll('.el-dialog__wrapper, .el-dialog, .v-modal');
-      for (const el of Array.from(elDialogs)) {
-        const htmlEl = el as HTMLElement;
-        if (isVisible(htmlEl)) {
-          modals.push(htmlEl);
-          break;
         }
       }
     } catch {}
