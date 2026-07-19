@@ -1312,14 +1312,14 @@ function getAllToggles(): HTMLElement[] {
 /**
  * 诊断：dump 弹窗/表单的 DOM 结构，帮助调试选择器问题。
  */
-function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles: string[]; fixedContainers: string[] } {
-  const result = { modals: [] as string[], inputs: [] as string[], toggles: [] as string[], fixedContainers: [] as string[] };
+function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles: string[]; fixedContainers: string[]; dialogBodyInputs: string[] } {
+  const result = { modals: [] as string[], inputs: [] as string[], toggles: [] as string[], fixedContainers: [] as string[], dialogBodyInputs: [] as string[] };
 
   // Check all potential modal selectors
   const modalSelectors = [
     '[role="dialog"]', '.ant-modal', '.el-dialog', '[aria-modal="true"]',
     '[class*="Modal"]', '[class*="modal"]', '[class*="Drawer"]', '[class*="drawer"]',
-    '[class*="dialog-content"]', '[class*="Dialog-content"]', '[class*="popup-content"]',
+    '[class*="dialog-content"]', '[class*="popup-content"]',
     '[class*="panel-content"]', '[class*="slide-panel"]', '[class*="edit-panel"]',
   ];
   for (const sel of modalSelectors) {
@@ -1334,19 +1334,20 @@ function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles:
     } catch {}
   }
 
-  // Check inputs
-  document.querySelectorAll('input, textarea, [contenteditable="true"], [contenteditable=""], .ant-input, .ant-input-affix-wrapper, .el-input__inner, .el-textarea__inner, [role="textbox"]').forEach((el) => {
+  // Check inputs (global)
+  document.querySelectorAll('input, textarea, [contenteditable="true"], .el-input, .ant-input, [role="textbox"]').forEach((el) => {
     const htmlEl = el as HTMLElement;
     if (htmlEl.getBoundingClientRect().width > 10) {
-      result.inputs.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" type="${(el as HTMLInputElement).type || ''}" placeholder="${(el as HTMLInputElement).placeholder || ''}" size=${Math.round(htmlEl.getBoundingClientRect().width)}x${Math.round(htmlEl.getBoundingClientRect().height)} ce="${(el as HTMLElement).contentEditable || ''}">`);
+      const r = htmlEl.getBoundingClientRect();
+      result.inputs.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" type="${(el as HTMLInputElement).type || ''}" ph="${(el as HTMLInputElement).placeholder || ''}" pos=(${Math.round(r.x)},${Math.round(r.y)}) size=${Math.round(r.width)}x${Math.round(r.height)} ce="${(el as HTMLElement).contentEditable || ''}">`);
     }
   });
 
   // Check toggles
-  document.querySelectorAll('[role="switch"], .ant-switch, [class*="switch"]').forEach((el) => {
+  document.querySelectorAll('[role="switch"], .el-switch, [class*="switch"]').forEach((el) => {
     const htmlEl = el as HTMLElement;
     if (isVisible(htmlEl)) {
-      result.toggles.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" aria-checked="${el.getAttribute('aria-checked') || ''}">`);
+      result.toggles.push(`<${el.tagName.toLowerCase()} class="${el.className?.toString().slice(0, 60) || ''}" aria="${el.getAttribute('aria-checked') || ''}">`);
     }
   });
 
@@ -1361,6 +1362,18 @@ function diagnosePageStructure(): { modals: string[]; inputs: string[]; toggles:
       }
     }
   });
+
+  // DIALOG BODY DETAILED SCAN — shows position of each input in el-dialog__body
+  const dialogBody = document.querySelector('.el-dialog__body') as HTMLElement | null;
+  if (dialogBody) {
+    dialogBody.querySelectorAll('input, textarea, [contenteditable="true"], .el-input, [role="textbox"], [tabindex]').forEach((el) => {
+      const htmlEl = el as HTMLElement;
+      const r = htmlEl.getBoundingClientRect();
+      if (r.width > 10) {
+        result.dialogBodyInputs.push(`<${el.tagName.toLowerCase()} class="${(el.className?.toString() || '').slice(0, 50)}" type="${(el as HTMLInputElement).type || ''}" ph="${(el as HTMLInputElement).placeholder || ''}" pos=(${Math.round(r.x)},${Math.round(r.y)}) size=${Math.round(r.width)}x${Math.round(r.height)} ce="${(el as HTMLElement).contentEditable || ''}">`);
+      }
+    });
+  }
 
   return result;
 }
