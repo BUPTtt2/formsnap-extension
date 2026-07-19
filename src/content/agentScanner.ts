@@ -991,6 +991,31 @@ export async function fillRowByRowAgent(
   const INPUTS_PER_ROW = 3;  // 名称, 描述, 默认值
   const TOGGLES_PER_ROW = 2;  // 支持Prompt, 支持工作流
 
+  // For row-by-row fill, use ONLY real input/textarea elements (not contenteditable, not tabindex)
+  const getRowTextInputs = (): HTMLElement[] => {
+    const modals = findVisibleModals();
+    const scope = modals.length > 0 ? modals[0] : document.body;
+    const inputs: HTMLElement[] = [];
+    scope.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+      'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner'
+    ).forEach((el) => {
+      const htmlEl = el as HTMLElement;
+      const rect = htmlEl.getBoundingClientRect();
+      if (rect.width > 10 && rect.height > 5 && isVisible(htmlEl)) {
+        inputs.push(htmlEl);
+      }
+    });
+    // Sort by position
+    inputs.sort((a, b) => {
+      const aR = a.getBoundingClientRect();
+      const bR = b.getBoundingClientRect();
+      return Math.abs(aR.top - bR.top) < 5 ? aR.left - bR.left : aR.top - bR.top;
+    });
+    console.log(`[FormSnap] getRowTextInputs: ${inputs.length} inputs in scope`,
+      inputs.map((el, i) => `#${i} <${el.tagName} class="${(el.className?.toString() || '').slice(0, 40)}" pos=(${Math.round(el.getBoundingClientRect().x)},${Math.round(el.getBoundingClientRect().y)})>`));
+    return inputs;
+  };
+
   let prevTotalInputs = 0;
   let prevTotalToggles = 0;
 
@@ -1023,7 +1048,7 @@ export async function fillRowByRowAgent(
         await delay(1500); // Wait for new row to render
       } else {
         // Row 0: snapshot current totals
-        const allInputs = getAllRowInputs();
+        const allInputs = getRowTextInputs();
         const allToggles = getAllToggles();
         prevTotalInputs = allInputs.length;
         prevTotalToggles = allToggles.length;
@@ -1031,7 +1056,7 @@ export async function fillRowByRowAgent(
       }
 
       // Get current totals
-      const currentInputs = getAllRowInputs();
+      const currentInputs = getRowTextInputs();
       const currentToggles = getAllToggles();
 
       // Extract new inputs/toggles for this row
