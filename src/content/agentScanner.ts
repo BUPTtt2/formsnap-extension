@@ -216,6 +216,23 @@ function findVisibleModals(): HTMLElement[] {
 
   // If we found modals, don't use fallbacks
   if (modals.length > 0) {
+    // If multiple modals, try to narrow down to the most relevant one
+    if (modals.length > 1) {
+      // Prefer the deepest (most specific) modal
+      const bestModal = modals.reduce((best, current) => {
+        const bestInputs = best.querySelectorAll('input, textarea, [contenteditable="true"]').length;
+        const currInputs = current.querySelectorAll('input, textarea, [contenteditable="true"]').length;
+        // Prefer the one with reasonable input count (not too many, not too few)
+        // Also prefer .el-dialog__body over .el-overlay-dialog
+        const bestIsBody = best.classList.contains('el-dialog__body') || best.classList.contains('dialog-body');
+        const currIsBody = current.classList.contains('el-dialog__body') || current.classList.contains('dialog-body');
+        const bestScore = (bestIsBody ? 1000 : 0) + Math.min(bestInputs, 50);
+        const currScore = (currIsBody ? 1000 : 0) + Math.min(currInputs, 50);
+        return currScore > bestScore ? current : best;
+      });
+      console.log(`[FormSnap] findVisibleModals: selected from ${modals.length}, using`, bestModal.className?.toString().slice(0, 40));
+      return [bestModal];
+    }
     console.log(`[FormSnap] findVisibleModals found ${modals.length} modals:`,
       modals.map((m) => `<${m.tagName} class="${(m.className?.toString() || '').slice(0, 50)}">`));
     return modals;
