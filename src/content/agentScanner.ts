@@ -1797,13 +1797,14 @@ export async function fillFromAnchor(
           result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
           break;
         }
-        await delay(1500); // 等待新行渲染
+        await delay(2000); // 等待新行渲染（增加延迟）
 
         // 重新定位锚定元素（DOM 可能已更新）
         anchorEl = relocateAnchorElement(anchorInfo);
         // 如果重新定位失败，用 Y 坐标递增策略找新行首元素
         if (!anchorEl) {
-          anchorEl = findElementBelowY(lastAnchorY);
+          // Use a more generous threshold: new row must be at least 30px below last anchor Y
+          anchorEl = findElementBelowY(lastAnchorY, 30);
           if (!anchorEl) {
             result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框`);
             break;
@@ -2142,7 +2143,7 @@ async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
 /**
  * 通过 Y 坐标递增查找锚定点下方新出现的输入元素。
  */
-function findElementBelowY(referenceY: number): HTMLElement | null {
+function findElementBelowY(referenceY: number, minGap: number = 5): HTMLElement | null {
   // Use broad search: find all inputs in page
   const allInputs: HTMLElement[] = [];
   const seen = new WeakSet<HTMLElement>();
@@ -2156,19 +2157,19 @@ function findElementBelowY(referenceY: number): HTMLElement | null {
     if (rect.width > 10 && rect.height > 5) allInputs.push(el);
   });
 
-  // 找到 Y 坐标刚好大于 referenceY 的第一个输入框
+  // 找到 Y 坐标刚好大于 referenceY + minGap 的第一个输入框
   let best: HTMLElement | null = null;
   let bestY = Infinity;
 
   for (const el of allInputs) {
     const rect = el.getBoundingClientRect();
-    if (rect.top > referenceY + 5 && rect.top < bestY) {
+    if (rect.top > referenceY + minGap && rect.top < bestY) {
       best = el;
       bestY = rect.top;
     }
   }
 
-  console.log(`[FormSnap] findElementBelowY(refY=${Math.round(referenceY)}): found ${best ? `<${best.tagName} class="${(best.className?.toString() || '').slice(0, 30)}" at Y=${Math.round(bestY)}>` : 'null'}`);
+  console.log(`[FormSnap] findElementBelowY(refY=${Math.round(referenceY)}, minGap=${minGap}): found ${best ? `<${best.tagName} class="${(best.className?.toString() || '').slice(0, 30)}" at Y=${Math.round(bestY)}>` : 'null'}`);
 
   return best;
 }
