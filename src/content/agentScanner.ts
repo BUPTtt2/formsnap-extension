@@ -1003,13 +1003,23 @@ export async function fillRowByRowAgent(
       if (modals.length > 0) scope = modals[0];
     }
     const inputs: HTMLElement[] = [];
-    scope.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-      'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner'
+    scope.querySelectorAll<HTMLElement>(
+      'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner, .el-input, .ant-input, [role="textbox"]'
     ).forEach((el) => {
       const htmlEl = el as HTMLElement;
       const rect = htmlEl.getBoundingClientRect();
       if (rect.width > 10 && rect.height > 5 && isVisible(htmlEl)) {
-        inputs.push(htmlEl);
+        // For wrapper elements (.el-input, .ant-input), check if they contain an inner input
+        // If so, use the inner input instead of the wrapper
+        const innerInput = el.querySelector('input, textarea');
+        if (innerInput && !el.matches('input, textarea')) {
+          const innerRect = innerInput.getBoundingClientRect();
+          if (innerRect.width > 10) {
+            inputs.push(innerInput as HTMLElement);
+          }
+        } else {
+          inputs.push(htmlEl);
+        }
       }
     });
     // Sort by position
