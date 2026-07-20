@@ -1781,30 +1781,6 @@ export async function fillFromAnchor(
     return result;
   }
 
-  // Count existing rows (rough estimate: all inputs at or below anchor Y, grouped by Y bands)
-  const countExistingRows = (): number => {
-    const allInputs: HTMLElement[] = [];
-    const seen = new WeakSet<HTMLElement>();
-    document.querySelectorAll<HTMLElement>(
-      'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner, [contenteditable="true"], .el-input input'
-    ).forEach((el) => {
-      if (seen.has(el)) return;
-      seen.add(el);
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 10 && rect.height > 5) allInputs.push(el);
-    });
-    // Group by Y bands (15px)
-    const yBands = new Set<number>();
-    for (const el of allInputs) {
-      const y = Math.round(el.getBoundingClientRect().top / 15) * 15;
-      yBands.add(y);
-    }
-    return yBands.size;
-  };
-
-  const existingRowCount = countExistingRows();
-  console.log(`[FormSnap] fillFromAnchor: ${existingRowCount} existing row bands, need ${dataRows.length} rows`);
-
   // 记录锚定 Y 坐标作为基准
   const anchorRect = anchorEl.getBoundingClientRect();
   let lastAnchorY = anchorRect.top;
@@ -1813,35 +1789,23 @@ export async function fillFromAnchor(
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
     const rowData = dataRows[rowIdx];
     try {
-      // 2. 重新定位当前行首元素
+      // 2. 新增行（Row 0 使用已有行，Row 1-N 点击新增）
       if (rowIdx > 0) {
-        // Check if there are already enough rows (don't add unnecessary rows)
-        const currentRowCount = countExistingRows();
-        if (currentRowCount >= rowIdx + 1) {
-          // Enough rows exist, skip add — just move to next row
-          anchorEl = findElementBelowY(lastAnchorY, 15);
-          if (!anchorEl) {
-            result.errors.push(`第 ${rowIdx + 1} 行：无法定位下一行输入框`);
-            break;
-          }
-          console.log(`[FormSnap] Row ${rowIdx}: ${currentRowCount} rows exist, skipping add`);
-        } else {
-          // Need to add a row
-          const added = await findAndClickAddButton(anchorEl!);
-          if (!added) {
-            result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
-            break;
-          }
-          await delay(1500); // 等待新行渲染
-
-          // 新增行后，必须用 Y 坐标递增定位新行（不能用 relocate，因为 selector 会匹配旧行）
-          anchorEl = findElementBelowY(lastAnchorY, 15);
-          if (!anchorEl) {
-            result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框 (lastY=${Math.round(lastAnchorY)})`);
-            break;
-          }
-          console.log(`[FormSnap] Row ${rowIdx}: added new row at Y=${Math.round(anchorEl.getBoundingClientRect().top)}`);
+        // 点击"+ 新增"按钮
+        const added = await findAndClickAddButton(anchorEl!);
+        if (!added) {
+          result.errors.push(`第 ${rowIdx + 1} 行：找不到"+ 新增"按钮`);
+          break;
         }
+        await delay(1500); // 等待新行渲染
+
+        // 用 Y 坐标递增定位新行首元素
+        anchorEl = findElementBelowY(lastAnchorY, 15);
+        if (!anchorEl) {
+          result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框 (lastY=${Math.round(lastAnchorY)})`);
+          break;
+        }
+        console.log(`[FormSnap] Row ${rowIdx}: added new row at Y=${Math.round(anchorEl.getBoundingClientRect().top)}`);
       }
 
       if (!anchorEl) {
