@@ -987,6 +987,33 @@ export default function Popup() {
     } catch {}
   }, []);
 
+  // Generate small thumbnails for storage (< 5KB each)
+  const generateThumbnails = async (images: string[]): Promise<string[]> => {
+    if (images.length === 0) return [];
+    const results: string[] = [];
+    for (const src of images.slice(0, 3)) { // Max 3 thumbnails
+      try {
+        const dataUrl = await new Promise<string>((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const maxW = 80;
+            const scale = maxW / img.width;
+            canvas.width = maxW;
+            canvas.height = Math.round(img.height * scale);
+            const ctx = canvas.getContext('2d');
+            ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.5)); // JPEG 50% quality
+          };
+          img.onerror = () => resolve('');
+          img.src = src;
+        });
+        if (dataUrl) results.push(dataUrl);
+      } catch {}
+    }
+    return results;
+  };
+
   // Restore from history entry
   const handleRestoreHistory = useCallback((entry: { key: string; data: any }) => {
     if (entry.data.parsedFields) {
@@ -996,9 +1023,11 @@ export default function Popup() {
         setTextContent(entry.data.textContent);
         setInputMode('text');
       }
-      if (entry.data.imageCount && entry.data.imageCount > 0) {
+      if (entry.data.thumbnails && entry.data.thumbnails.length > 0) {
+        setImagePreviews(entry.data.thumbnails);
         setInputMode('image');
-        // Note: image base64 data is too large to store in history, but we keep the count
+      } else if (entry.data.imageCount && entry.data.imageCount > 0) {
+        setInputMode('image');
       }
       // Always go to data-review page (so user can see and edit parsed fields)
       setStep('data-review');
@@ -1013,21 +1042,27 @@ export default function Popup() {
   // Save current data to manual slot
   const handleSaveManual = useCallback(async (slot: number) => {
     const label = prompt('请输入保存名称（可选）：') || `手动保存 ${slot + 1}`;
+    // Generate small thumbnails for history preview
+    const thumbnails = await generateThumbnails(imagePreviews);
     await sendMessage('SAVE_MAPPING_HISTORY', {
       type: 'manual', slot, label,
-      data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review' },
+      data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review', thumbnails },
     });
     setStatus({ type: 'success', text: `已保存到手动槽位 ${slot + 1}` });
-  }, [parsedFields, textContent]);
+    handleLoadHistory();
+  }, [parsedFields, textContent, imagePreviews]);
 
   // Auto-save after successful fill
   useEffect(() => {
     if (step === 'done' && parsedFields.length > 0) {
-      sendMessage('SAVE_MAPPING_HISTORY', {
-        type: 'auto',
-        label: `${parsedFields.length} 个字段`,
-        data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review' },
-      }).catch(() => {});
+      // Generate thumbnails asynchronously
+      generateThumbnails(imagePreviews).then((thumbnails) => {
+        sendMessage('SAVE_MAPPING_HISTORY', {
+          type: 'auto',
+          label: `${parsedFields.length} 个字段`,
+          data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review', thumbnails },
+        }).catch(() => {});
+      });
     }
   }, [step]);
 
@@ -1136,11 +1171,17 @@ export default function Popup() {
                     <div style={{ maxHeight: 120, overflowY: 'auto' }}>
                       {autoEntries.map((entry) => (
                         <div key={entry.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #f3f4f6', fontSize: 11 }}>
-                          <div>
-                            <div style={{ color: '#374151' }}>{entry.label || `${entry.data.parsedFields?.length || 0} 字段`}</div>
-                            <div style={{ color: '#9ca3af', fontSize: 10 }}>{new Date(entry.timestamp).toLocaleString()}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+                            {/* Thumbnail preview */}
+                            {entry.data.thumbnails?.[0] && (
+                              <img src={entry.data.thumbnails[0]} alt="" style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                            )}
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label || `${entry.data.parsedFields?.length || 0} 字段`}</div>
+                              <div style={{ color: '#9ca3af', fontSize: 10 }}>{new Date(entry.timestamp).toLocaleString()} · {entry.data.parsedFields?.length || 0}字段</div>
+                            </div>
                           </div>
-                          <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 6px' }}
+                          <button className="btn btn-outline" style={{ fontSize: 10, padding: '2px 6px', flexShrink: 0 }}
                             onClick={() => handleRestoreHistory(entry)}>恢复</button>
                         </div>
                       ))}
@@ -1170,12 +1211,14 @@ export default function Popup() {
                             } else if (parsedFields.length > 0) {
                               const label = prompt(`保存预设 ${slot + 1} 名称：`, `预设 ${slot + 1}`);
                               if (label !== null) {
-                                sendMessage('SAVE_MAPPING_HISTORY', {
-                                  type: 'manual', slot, label,
-                                  data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review' },
-                                }).then(() => {
-                                  setStatus({ type: 'success', text: `已保存预设: ${label}` });
-                                  handleLoadHistory();
+                                generateThumbnails(imagePreviews).then((thumbnails) => {
+                                  sendMessage('SAVE_MAPPING_HISTORY', {
+                                    type: 'manual', slot, label,
+                                    data: { parsedFields, textContent, imageCount: imagePreviews.length, step: 'data-review', thumbnails },
+                                  }).then(() => {
+                                    setStatus({ type: 'success', text: `已保存预设: ${label}` });
+                                    handleLoadHistory();
+                                  });
                                 });
                               }
                             } else {
@@ -1183,12 +1226,19 @@ export default function Popup() {
                             }
                           }}
                           disabled={!existing && parsedFields.length === 0}>
-                          <span style={{ fontWeight: 500, color: '#374151' }}>
-                            {existing ? (existing.label || `预设 ${slot + 1}`).slice(0, 10) : `预设 ${slot + 1}`}
-                          </span>
-                          <span style={{ fontSize: 9, color: '#9ca3af' }}>
-                            {existing ? `${new Date(existing.timestamp).toLocaleDateString()} · ${existing.data.parsedFields?.length || 0}字段` : '空槽位'}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%' }}>
+                            {existing?.data.thumbnails?.[0] && (
+                              <img src={existing.data.thumbnails[0]} alt="" style={{ width: 24, height: 24, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }} />
+                            )}
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <span style={{ fontWeight: 500, color: '#374151', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {existing ? (existing.label || `预设 ${slot + 1}`).slice(0, 10) : `预设 ${slot + 1}`}
+                              </span>
+                              <span style={{ fontSize: 9, color: '#9ca3af' }}>
+                                {existing ? `${new Date(existing.timestamp).toLocaleDateString()} · ${existing.data.parsedFields?.length || 0}字段` : '空槽位'}
+                              </span>
+                            </div>
+                          </div>
                         </button>
                       );
                     })}
