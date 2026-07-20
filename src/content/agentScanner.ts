@@ -676,15 +676,28 @@ function fillToggle(el: HTMLElement, value: string): void {
   const booleanValue = parseBoolean(value);
   const currentState = getToggleState(el);
 
-  // 如果当前状态与期望不同，则点击切换
-  if (currentState !== booleanValue) {
+  // INVERT: if state detection is unreliable, use visual position as fallback
+  // Check if the switch knob is on the right (ON) or left (OFF)
+  const knob = el.querySelector('.el-switch__action, .el-switch__core *') as HTMLElement | null;
+  let visualState = currentState;
+  if (knob) {
+    const parentRect = el.getBoundingClientRect();
+    const knobRect = knob.getBoundingClientRect();
+    // If knob center is in the right half of the switch → ON
+    const knobCenter = knobRect.left + knobRect.width / 2;
+    visualState = knobCenter > parentRect.left + parentRect.width / 2;
+  }
+
+  // Use visual state if it differs from class-based state
+  const effectiveState = visualState;
+
+  if (effectiveState !== booleanValue) {
     el.click();
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    // Also try React-compatible click
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    console.log(`[FormSnap] Toggle: ${currentState} → ${booleanValue}, clicked`, el.className);
+    console.log(`[FormSnap] Toggle: visual=${visualState} class=${currentState} → want ${booleanValue}, clicked`, el.className);
   } else {
-    console.log(`[FormSnap] Toggle: already ${booleanValue}, skip`);
+    console.log(`[FormSnap] Toggle: already ${booleanValue} (visual=${visualState}), skip`);
   }
 }
 
@@ -2135,9 +2148,9 @@ async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
     const btn = matched[0].el;
     btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await delay(300);
-    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    // Only click once — do NOT dispatch extra mousedown/mouseup as it may cause double-fire
     btn.click();
+    console.log(`[FormSnap] findAndClickAddButton: clicked "${btn.textContent?.trim().slice(0, 20)}"`);
     return true;
   }
 
