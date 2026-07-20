@@ -47,6 +47,10 @@ export default function Popup() {
   const [modalButtons, setModalButtons] = useState<ModalInfo[] | null>(null);
   const [scanDepth, setScanDepth] = useState<'standard' | 'deep'>('standard');
   const [pageMode, setPageMode] = useState<string>('standard');
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const [imagePreviewExpanded, setImagePreviewExpanded] = useState<string | null>(null);
+  const [textContentExpanded, setTextContentExpanded] = useState(false);
   const [tableModalData, setTableModalData] = useState<{ headers: string[]; rows: any[]; modalSelector: string } | null>(null);
   const [agentProgress, setAgentProgress] = useState<{ current: number; total: number } | null>(null);
 
@@ -1418,12 +1422,121 @@ export default function Popup() {
             <span className="mapping-count">{parsedFields.length} 个字段</span>
           </div>
 
+          {/* Image preview thumbnails */}
+          {imagePreviews.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, fontWeight: 500 }}>截图预览</div>
+              <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+                {imagePreviews.map((src, i) => (
+                  <img
+                    key={i}
+                    src={src}
+                    alt={`截图 ${i + 1}`}
+                    onClick={() => setImagePreviewExpanded(src)}
+                    style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, cursor: 'pointer', border: '1px solid #e5e7eb', flexShrink: 0 }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Image preview modal */}
+          {imagePreviewExpanded && (
+            <div
+              onClick={() => setImagePreviewExpanded(null)}
+              style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+            >
+              <div style={{ position: 'relative', background: '#fff', borderRadius: 8, padding: 8, maxWidth: '100%', maxHeight: 340 }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setImagePreviewExpanded(null); }}
+                  style={{ position: 'absolute', top: -8, right: -8, width: 22, height: 22, borderRadius: '50%', border: 'none', background: '#374151', color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                >✕</button>
+                <img
+                  src={imagePreviewExpanded}
+                  alt="预览大图"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ maxWidth: '100%', maxHeight: 300, borderRadius: 4, display: 'block' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Text content preview */}
+          {textContent.trim() && (
+            <div style={{ marginBottom: 10, padding: '6px 10px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: 11, color: '#374151' }}>
+              <div style={{ fontWeight: 500, color: '#6b7280', marginBottom: 3 }}>文本内容预览</div>
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {textContentExpanded ? textContent : textContent.slice(0, 200)}
+                {textContent.length > 200 && (
+                  <span
+                    onClick={() => setTextContentExpanded(!textContentExpanded)}
+                    style={{ color: '#2563eb', cursor: 'pointer', marginLeft: 4, fontWeight: 500 }}
+                  >
+                    {textContentExpanded ? '收起' : '...展开'}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           <div style={{ marginBottom: 12, padding: '8px 10px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: 8, fontSize: 11, color: '#16a34a' }}>
-            数据解析完成。请确认字段无误后，点击下方按钮扫描页面并填写。
+            数据解析完成。点击字段值可编辑。确认无误后，点击下方按钮扫描页面并填写。
           </div>
 
-          {/* Group parsed fields by row number (from "1.名称" format) */}
+          {/* Inline editable fields */}
           {(() => {
+            const isToggle = (val: string) => val === '开' || val === '关' || val === '是' || val === '否' || val === 'true' || val === 'false' || val === '启用' || val === '禁用' || val === '启用Prompt' || val === '启用工作流';
+
+            const commitEdit = (fieldKey: string, newValue: string) => {
+              setParsedFields(prev => prev.map(f => f.field === fieldKey ? { ...f, value: newValue } : f));
+              setEditingField(null);
+            };
+
+            const toggleField = (fieldKey: string, currentVal: string) => {
+              const onValues = ['开', '是', 'true', '启用', '启用Prompt', '启用工作流'];
+              const newVal = onValues.includes(currentVal) ? '关' : '开';
+              setParsedFields(prev => prev.map(f => f.field === fieldKey ? { ...f, value: newVal } : f));
+            };
+
+            const renderInlineValue = (f: ParsedField, idx: number) => {
+              const fieldKey = f.field;
+              if (isToggle(f.value)) {
+                const isOn = ['开', '是', 'true', '启用', '启用Prompt', '启用工作流'].includes(f.value);
+                return (
+                  <span
+                    onClick={() => toggleField(fieldKey, f.value)}
+                    style={{
+                      display: 'inline-block', padding: '1px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      color: '#fff', background: isOn ? '#22c55e' : '#9ca3af',
+                      minWidth: 32, textAlign: 'center', userSelect: 'none', lineHeight: '18px',
+                    }}
+                  >{f.value}</span>
+                );
+              }
+              if (editingField === fieldKey) {
+                return (
+                  <input
+                    autoFocus
+                    value={editingValue}
+                    onChange={e => setEditingValue(e.target.value)}
+                    onBlur={() => commitEdit(fieldKey, editingValue)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') commitEdit(fieldKey, editingValue);
+                      if (e.key === 'Escape') setEditingField(null);
+                    }}
+                    style={{ width: '100%', padding: '1px 4px', fontSize: 12, border: '1px solid #3b82f6', borderRadius: 3, outline: 'none', color: '#374151', background: '#fff', boxSizing: 'border-box' }}
+                  />
+                );
+              }
+              return (
+                <span
+                  onClick={() => { setEditingField(fieldKey); setEditingValue(f.value || ''); }}
+                  style={{ cursor: 'pointer', padding: '1px 2px', borderRadius: 2, color: f.value ? '#374151' : '#9ca3af' }}
+                  title="点击编辑"
+                >{f.value || '(空)'}</span>
+              );
+            };
+
             const groups: Record<string, ParsedField[]> = {};
             parsedFields.forEach((f) => {
               const match = f.field.match(/^(\d+)\./);
@@ -1433,7 +1546,6 @@ export default function Popup() {
             });
             const isGrouped = Object.keys(groups).some((k) => k !== '_flat');
             if (!isGrouped) {
-              // Flat display (original)
               return (
                 <div style={{ marginBottom: 12, maxHeight: 200, overflowY: 'auto' }}>
                   <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
@@ -1446,7 +1558,7 @@ export default function Popup() {
                       {parsedFields.map((f, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
                           <td style={{ padding: '4px 8px', color: '#374151' }}>{f.field}</td>
-                          <td style={{ padding: '4px 8px', color: '#6b7280', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.value || '(空)'}</td>
+                          <td style={{ padding: '4px 8px', maxWidth: 160 }}>{renderInlineValue(f, i)}</td>
                           <td style={{ padding: '4px 8px', color: '#9ca3af', fontSize: 11 }}>{f.type}</td>
                         </tr>
                       ))}
@@ -1455,14 +1567,12 @@ export default function Popup() {
                 </div>
               );
             }
-            // Grouped display — each row of the original table is a collapsible group
             const sortedKeys = Object.keys(groups).filter((k) => k !== '_flat').sort((a, b) => +a - +b);
             const flatFields = groups['_flat'] || [];
             return (
               <div style={{ marginBottom: 12, maxHeight: 250, overflowY: 'auto' }}>
                 {sortedKeys.map((rowKey) => {
                   const rowFields = groups[rowKey];
-                  // Find the "name" field for the row header
                   const nameField = rowFields.find((f) => f.field.includes('名称'));
                   return (
                     <details key={rowKey} style={{ marginBottom: 6, border: '1px solid #e5e7eb', borderRadius: 6 }} open>
@@ -1477,7 +1587,7 @@ export default function Popup() {
                             return (
                               <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
                                 <td style={{ padding: '3px 10px', color: '#374151', fontWeight: 500, width: '40%' }}>{colName}</td>
-                                <td style={{ padding: '3px 10px', color: '#6b7280' }}>{f.value || '(空)'}</td>
+                                <td style={{ padding: '3px 10px' }}>{renderInlineValue(f, i)}</td>
                                 <td style={{ padding: '3px 10px', color: '#9ca3af', fontSize: 10 }}>{f.type}</td>
                               </tr>
                             );
@@ -1497,7 +1607,7 @@ export default function Popup() {
                         {flatFields.map((f, i) => (
                           <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
                             <td style={{ padding: '3px 10px', color: '#374151', fontWeight: 500, width: '40%' }}>{f.field}</td>
-                            <td style={{ padding: '3px 10px', color: '#6b7280' }}>{f.value || '(空)'}</td>
+                            <td style={{ padding: '3px 10px' }}>{renderInlineValue(f, i)}</td>
                             <td style={{ padding: '3px 10px', color: '#9ca3af', fontSize: 10 }}>{f.type}</td>
                           </tr>
                         ))}
