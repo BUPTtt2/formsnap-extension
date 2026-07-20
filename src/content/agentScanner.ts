@@ -701,13 +701,22 @@ function getToggleState(el: HTMLElement): boolean {
   if (ariaChecked !== null) {
     return ariaChecked === 'true';
   }
-  // Element UI switch: .is-active or .is-checked
+  // Element UI switch: .is-active means ON, absence means OFF
+  // But some UI libraries invert this — check aria-checked first as it's more reliable
   const classStr = el.className?.toString() || '';
   if (classStr.includes('el-switch')) {
-    return classStr.includes('is-active') || classStr.includes('is-checked');
+    // Check aria-checked first (most reliable)
+    const aria = el.getAttribute('aria-checked');
+    if (aria !== null) return aria === 'true';
+    // Fallback: check .is-active
+    return classStr.includes('is-active');
   }
   // Ant Design switch: ant-switch-checked
-  return classStr.includes('checked') || classStr.includes('active');
+  if (classStr.includes('ant-switch')) {
+    return classStr.includes('ant-switch-checked');
+  }
+  // Generic: checked or active class means ON
+  return classStr.includes('-checked') || classStr.includes('-active');
 }
 
 /**
