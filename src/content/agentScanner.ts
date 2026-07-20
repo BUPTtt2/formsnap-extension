@@ -716,10 +716,10 @@ function getToggleState(el: HTMLElement): boolean {
  */
 function parseBoolean(value: string): boolean {
   const lower = value.trim().toLowerCase();
-  if (['true', '1', '是', 'yes', 'on', '开启', 'checked'].includes(lower)) {
+  if (['true', '1', '是', 'yes', 'on', '开启', 'checked', '开'].includes(lower)) {
     return true;
   }
-  if (['false', '0', '否', 'no', 'off', '关闭', 'unchecked'].includes(lower)) {
+  if (['false', '0', '否', 'no', 'off', '关闭', 'unchecked', '关'].includes(lower)) {
     return false;
   }
   // 非空字符串视为 true
@@ -1800,12 +1800,12 @@ export async function fillFromAnchor(
         await delay(1500); // 等待新行渲染
 
         // 用 Y 坐标递增定位新行首元素
-        anchorEl = findElementBelowY(lastAnchorY, 15);
-        if (!anchorEl) {
-          result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框 (lastY=${Math.round(lastAnchorY)})`);
-          break;
-        }
-        console.log(`[FormSnap] Row ${rowIdx}: added new row at Y=${Math.round(anchorEl.getBoundingClientRect().top)}`);
+        anchorEl = await findElementBelowY(lastAnchorY, 15);
+          if (!anchorEl) {
+            result.errors.push(`第 ${rowIdx + 1} 行：无法定位新行输入框 (lastY=${Math.round(lastAnchorY)})`);
+            break;
+          }
+          console.log(`[FormSnap] Row ${rowIdx}: added new row at Y=${Math.round(anchorEl.getBoundingClientRect().top)}`);
       }
 
       if (!anchorEl) {
@@ -2139,7 +2139,7 @@ async function findAndClickAddButton(anchorEl: HTMLElement): Promise<boolean> {
 /**
  * 通过 Y 坐标递增查找锚定点下方新出现的输入元素。
  */
-function findElementBelowY(referenceY: number, minGap: number = 5): HTMLElement | null {
+async function findElementBelowY(referenceY: number, minGap: number = 5): Promise<HTMLElement | null> {
   // Use broad search: find all inputs in page
   const allInputs: HTMLElement[] = [];
   const seen = new WeakSet<HTMLElement>();
@@ -2163,6 +2163,34 @@ function findElementBelowY(referenceY: number, minGap: number = 5): HTMLElement 
       best = el;
       bestY = rect.top;
     }
+  }
+
+  // If not found, try scrolling the dialog down and retry
+  if (!best) {
+    // Try to find scrollable container and scroll down
+    const scrollables = document.querySelectorAll<HTMLElement>(
+      '.el-dialog__body, .el-dialog, [class*="body"], [class*="content"]'
+    );
+    for (const scrollable of Array.from(scrollables)) {
+      if (scrollable.scrollHeight > scrollable.clientHeight) {
+        scrollable.scrollTop += 100;
+        break;
+      }
+    }
+    await delay(500);
+
+    // Retry scan
+    document.querySelectorAll<HTMLElement>(
+      'input[type="text"], input:not([type]), textarea, .el-input__inner, .el-textarea__inner, [contenteditable="true"], .el-input input'
+    ).forEach((el) => {
+      if (seen.has(el)) return;
+      seen.add(el);
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 10 && rect.height > 5 && rect.top > referenceY + minGap && rect.top < bestY) {
+        best = el;
+        bestY = rect.top;
+      }
+    });
   }
 
   console.log(`[FormSnap] findElementBelowY(refY=${Math.round(referenceY)}, minGap=${minGap}): found ${best ? `<${best.tagName} class="${(best.className?.toString() || '').slice(0, 30)}" at Y=${Math.round(bestY)}>` : 'null'}`);
