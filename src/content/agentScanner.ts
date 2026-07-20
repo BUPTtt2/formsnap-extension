@@ -1207,6 +1207,181 @@ export async function fillRowByRowAgent(
 }
 
 /**
+ * 清理弹窗内的多余空行。
+ * 扫描弹窗内所有行，找到名称为空或为占位符 "请输入内容" 的空行，
+ * 点击其"删除"按钮删除空行。每删除一行后等待 500ms。
+ * 找不到删除按钮的行会被跳过（不删除有数据的行）。
+ */
+async function cleanupEmptyRows(): Promise<number> {
+  const modals = findVisibleModals();
+  const scope: HTMLElement = modals.length > 0 ? modals[0] : document.body;
+  let removedCount = 0;
+  const skipped = new WeakSet<HTMLElement>();
+
+  // 重复多轮：每轮找到第一个可删除的空行并删除，直到没有空行或全部被跳过
+  for (let iter = 0; iter < 30; iter++) {
+    const emptyRow = findFirstEmptyRow(scope, skipped);
+    if (!emptyRow) break;
+
+    const deleted = await clickDeleteButtonForRow(emptyRow);
+    if (!deleted) {
+      // 找不到删除按钮，跳过此行避免死循环
+      skipped.add(emptyRow);
+      continue;
+    }
+
+    removedCount++;
+    await delay(500);
+  }
+
+  return removedCount;
+}
+
+/**
+ * 在给定作用域内查找第一个空行（名称输入为空或等于占位符 "请输入内容"）。
+ * 跳过 skipped 集合中的行。
+ */
+function findFirstEmptyRow(scope: HTMLElement, skipped: WeakSet<HTMLElement>): HTMLElement | null {
+  // 行选择器：覆盖原生 table、div 网格、常见框架行 class
+  const rowSelectors =
+    'tr, [role="row"], [class*="table-row"], [class*="tableRow"], [class*="table_row"], [class*="form-row"], [class*="formRow"]';
+  const rows = Array.from(scope.querySelectorAll<HTMLElement>(rowSelectors));
+
+  for (const row of rows) {
+    if (skipped.has(row)) continue;
+    if (isRowEmpty(row)) return row;
+  }
+
+  // 兜底：如果没找到结构化行，尝试把含输入框的子容器当作行
+  if (rows.length === 0) {
+    const inputContainers = Array.from(
+      scope.querySelectorAll<HTMLElement>('.el-form-item, .ant-form-item, .form-item, .el-col')
+    );
+    for (const c of inputContainers) {
+      if (skipped.has(c)) continue;
+      if (isRowEmpty(c)) return c;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 判断一行是否为空行：第一个文本输入框的值为空，或等于占位符 "请输入内容"。
+ */
+function isRowEmpty(row: HTMLElement): boolean {
+  const inputSelectors =
+    'input[type="text"], input:not([type]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, .el-input__inner, .el-textarea__inner, [contenteditable="true"], [role="textbox"]';
+  const inputs = row.querySelectorAll<HTMLElement>(inputSelectors);
+  if (inputs.length === 0) return false; // 没有输入框，不是数据行
+
+  const firstInput = inputs[0] as HTMLInputElement & { contentEditable: string };
+  const value = ((firstInput as HTMLInputElement).value || firstInput.textContent || '').trim();
+  const placeholder = ((firstInput as HTMLInputElement).placeholder || '').trim();
+
+  // 空行：值为空，或值等于占位符文字 "请输入内容"
+  if (value === '') return true;
+  if (value === '请输入内容') return true;
+  if (placeholder === '请输入内容' && value === placeholder) return true;
+
+  return false;
+}
+
+/**
+ * 在给定行中查找并点击"删除"按钮。
+ * 策略：
+ * 1. 先 hover 行以显示可能的隐藏删除按钮
+ * 2. 按 class/aria-label/title 匹配 delete/remove/trash 相关按钮
+ * 3. 匹配常见框架的删除图标（Element UI / Ant Design 等）
+ * 4. 在行末尾"操作"列中查找删除按钮
+ * 找不到则返回 false（不点击任何非删除按钮，避免误删有数据的行）。
+ */
+async function clickDeleteButtonForRow(row: HTMLElement): Promise<boolean> {
+  // 1. 触发 hover 事件以显示删除按钮（许多表格 UI 在 hover 时才显示操作按钮）
+  try {
+    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    row.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+  } catch {}
+  await delay(120);
+
+  // 2. class / aria-label / title 文字匹配（中英文 + 常见图标 class）
+  const deleteSelectors = [
+    '[class*="delete"]', '[class*="Delete"]', '[class*="DELETE"]',
+    '[class*="remove"]', '[class*="Remove"]', '[class*="REMOVE"]',
+    '[class*="trash"]', '[class*="Trash"]', '[class*="TRASH"]',
+    '[aria-label*="删除"]', '[aria-label*="Delete"]', '[aria-label*="delete"]',
+    '[aria-label*="移除"]', '[aria-label*="Remove"]',
+    '[title*="删除"]', '[title*="Delete"]', '[title*="delete"]',
+    '[title*="移除"]', '[title*="Remove"]',
+    '.el-icon-delete', '.el-icon-delete2', '.anticon-delete',
+    '.el-button--danger.is-circle', '.el-button--danger.is-icon',
+  ];
+  for (const sel of deleteSelectors) {
+    const btn = row.querySelector<HTMLElement>(sel);
+    if (btn) {
+      // 若匹配到的是 svg/i 图标，点击其可点击父元素（通常是 button）
+      const clickTarget = (btn.closest('button, [role="button"], .el-button, .ant-btn') as HTMLElement) || btn;
+      try { clickTarget.click(); } catch {}
+      console.log(`[FormSnap] cleanupEmptyRows: 通过 "${sel}" 删除一行`);
+      return true;
+    }
+  }
+
+  // 3. SVG/图标兜底：检查行内 svg/i 图标的 class 或父元素 class
+  const icons = row.querySelectorAll<HTMLElement>('svg, i, .icon');
+  for (const icon of icons) {
+    const cls = (icon.className?.toString() || '').toLowerCase();
+    const parent = icon.parentElement;
+    const parentCls = parent ? (parent.className?.toString() || '').toLowerCase() : '';
+    const titleAttr = (icon.getAttribute('title') || parent?.getAttribute('title') || '');
+    const ariaLabelAttr = (icon.getAttribute('aria-label') || parent?.getAttribute('aria-label') || '');
+
+    const isDeleteIcon =
+      cls.includes('delete') || cls.includes('remove') || cls.includes('trash') ||
+      parentCls.includes('delete') || parentCls.includes('remove') || parentCls.includes('trash') ||
+      titleAttr.includes('删除') || titleAttr.toLowerCase().includes('delete') ||
+      ariaLabelAttr.includes('删除') || ariaLabelAttr.toLowerCase().includes('delete');
+
+    if (isDeleteIcon) {
+      const clickTarget = (icon.closest('button, [role="button"], .el-button, .ant-btn') as HTMLElement) || icon;
+      try { clickTarget.click(); } catch {}
+      console.log('[FormSnap] cleanupEmptyRows: 通过图标删除一行');
+      return true;
+    }
+  }
+
+  // 4. 行末"操作"列兜底：找到最后一个单元格内的按钮，仅当文字/class 强烈指示删除时点击
+  const cells = row.querySelectorAll('td, [role="cell"], [role="gridcell"], .el-table__cell');
+  if (cells.length > 0) {
+    const lastCell = cells[cells.length - 1] as HTMLElement;
+    const btns = lastCell.querySelectorAll<HTMLElement>('button, [role="button"], .el-button, .ant-btn');
+    for (const btn of btns) {
+      const text = (btn.textContent || '').trim();
+      const cls = (btn.className?.toString() || '').toLowerCase();
+      const ariaLabel = (btn.getAttribute('aria-label') || '').trim();
+      const titleAttr = (btn.getAttribute('title') || '').trim();
+
+      // 仅当有删除语义时点击（避免点到"编辑"/"查看"等）
+      const looksDelete =
+        text.includes('删除') || text.includes('移除') ||
+        cls.includes('delete') || cls.includes('remove') || cls.includes('trash') ||
+        cls.includes('danger') || // Element UI 删除常为 danger 样式
+        ariaLabel.includes('删除') || titleAttr.includes('删除') ||
+        ariaLabel.toLowerCase().includes('delete') || titleAttr.toLowerCase().includes('delete');
+
+      if (looksDelete) {
+        try { btn.click(); } catch {}
+        console.log('[FormSnap] cleanupEmptyRows: 通过操作列删除一行');
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Direct value setting — operates on the exact element, no querySelector cross-boundary.
  */
 function setNativeValueDirect(element: HTMLElement, value: string): void {
@@ -1645,20 +1820,23 @@ function enterAnchorMode(
           '_formsnap_fill_result': {
             totalRows: fillResult.totalRows,
             filledRows: fillResult.filledRows,
+            removedEmptyRows: fillResult.removedEmptyRows,
             errors: fillResult.errors,
             timestamp: Date.now(),
           },
         });
 
         if (fillResult.filledRows === fillResult.totalRows) {
+          const cleanHint = fillResult.removedEmptyRows > 0 ? `，清理 ${fillResult.removedEmptyRows} 个空行` : '';
           showFloatingNotification(
-            `填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功`,
+            `填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功${cleanHint}`,
             'success',
           );
         } else {
           const errHint = fillResult.errors.length > 0 ? `（${fillResult.errors.length} 个警告）` : '';
+          const cleanHint = fillResult.removedEmptyRows > 0 ? `，清理 ${fillResult.removedEmptyRows} 个空行` : '';
           showFloatingNotification(
-            `填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功${errHint}`,
+            `填写完成：${fillResult.filledRows}/${fillResult.totalRows} 行成功${errHint}${cleanHint}`,
             fillResult.filledRows > 0 ? 'info' : 'error',
           );
         }
@@ -1793,8 +1971,8 @@ function highlightElement(el: HTMLElement): void {
 export async function fillFromAnchor(
   anchorInfo: AnchorElementInfo,
   dataRows: { colName: string; value: string; type: string }[][]
-): Promise<{ totalRows: number; filledRows: number; errors: string[] }> {
-  const result = { totalRows: dataRows.length, filledRows: 0, errors: [] as string[] };
+): Promise<{ totalRows: number; filledRows: number; removedEmptyRows: number; errors: string[] }> {
+  const result = { totalRows: dataRows.length, filledRows: 0, removedEmptyRows: 0, errors: [] as string[] };
 
   // 1. 重新定位锚定元素
   let anchorEl = relocateAnchorElement(anchorInfo);
@@ -1884,6 +2062,17 @@ export async function fillFromAnchor(
     } catch (err) {
       result.errors.push(`第 ${rowIdx + 1} 行出错: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  // 5. 清理多余空行：填写完成后，弹窗内可能残留名称为空/占位符的空行，逐个删除
+  try {
+    const removed = await cleanupEmptyRows();
+    result.removedEmptyRows = removed;
+    if (removed > 0) {
+      console.log(`[FormSnap] fillFromAnchor: 清理了 ${removed} 个空行`);
+    }
+  } catch (err) {
+    console.warn('[FormSnap] fillFromAnchor: 清理空行失败', err);
   }
 
   return result;

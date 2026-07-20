@@ -943,16 +943,18 @@ export default function Popup() {
 
       const totalRows = fillData.totalRows || 0;
       const filledRows = fillData.filledRows || 0;
+      const removedEmptyRows = fillData.removedEmptyRows || 0;
       const errors = fillData.errors || [];
 
       setFillResult({ total: totalRows, success: filledRows, failed: totalRows - filledRows });
       setCanUndo(false);
       setStep('done');
       const errHint = errors.length > 0 ? `（${errors.length} 个警告）` : '';
+      const cleanHint = removedEmptyRows > 0 ? `，已清理 ${removedEmptyRows} 个空行` : '';
       if (filledRows === totalRows) {
-        setStatus({ type: 'success', text: `逐行填写完成：${filledRows}/${totalRows} 行成功${errHint}` });
+        setStatus({ type: 'success', text: `逐行填写完成：${filledRows}/${totalRows} 行成功${errHint}${cleanHint}` });
       } else {
-        setStatus({ type: 'error', text: `逐行填写完成：${filledRows}/${totalRows} 行成功${errHint}` });
+        setStatus({ type: 'error', text: `逐行填写完成：${filledRows}/${totalRows} 行成功${errHint}${cleanHint}` });
       }
     });
   }, []);
@@ -1041,6 +1043,44 @@ export default function Popup() {
       setFillResult(null);
       setStatus({ type: 'success', text: `已恢复历史记录（${entry.data.parsedFields.length} 个字段）` });
     }
+  }, []);
+
+  // Load resume template (mock Kuaishou campus recruitment resume)
+  const handleLoadResumeTemplate = useCallback(() => {
+    const resumeFields: ParsedField[] = [
+      { field: '姓名', value: '张三', type: 'text' },
+      { field: '手机', value: '13800138000', type: 'text' },
+      { field: '邮箱', value: 'zhangsan@example.com', type: 'text' },
+      { field: '国家地区', value: '中国', type: 'select' },
+      { field: '身份证号', value: '110101200001011234', type: 'text' },
+      { field: '性别', value: '男', type: 'radio' },
+      { field: '出生日期', value: '2000-01-01', type: 'text' },
+      { field: '现居地', value: '北京', type: 'text' },
+      { field: '招聘信息来源', value: '员工内推', type: 'select' },
+      { field: '最高学历', value: '本科', type: 'select' },
+    ];
+    const resumeText = [
+      '姓名: 张三',
+      '手机: 13800138000',
+      '邮箱: zhangsan@example.com',
+      '国家地区: 中国',
+      '身份证号: 110101200001011234',
+      '性别: 男',
+      '出生日期: 2000-01-01',
+      '现居地: 北京',
+      '招聘信息来源: 员工内推',
+      '最高学历: 本科',
+    ].join('\n');
+
+    setParsedFields(resumeFields);
+    setTextContent(resumeText);
+    setInputMode('text');
+    setFormFields([]);
+    setMappings([]);
+    setFillResult(null);
+    setShowHistory(false);
+    setStep('data-review');
+    setStatus({ type: 'success', text: `已载入简历模板（${resumeFields.length} 个字段）` });
   }, []);
 
   // Save current data to manual slot
@@ -1195,8 +1235,18 @@ export default function Popup() {
 
                 {/* Manual presets */}
                 <div>
-                  <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginBottom: 4 }}>
-                    手动预设（{manualEntries.length}/6）
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
+                      手动预设（{manualEntries.length}/6）
+                    </span>
+                    <button
+                      className="btn btn-outline"
+                      style={{ fontSize: 10, padding: '2px 8px', borderColor: '#3b82f6', color: '#3b82f6' }}
+                      onClick={handleLoadResumeTemplate}
+                      title="载入快手校招简历模拟数据"
+                    >
+                      简历模板
+                    </button>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
                     {[0, 1, 2, 3, 4, 5].map((slot) => {
